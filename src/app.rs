@@ -201,6 +201,9 @@ impl App {
         style::apply_visuals(&ctx);
         ctx.set_theme(startup.settings.theme.preference());
         ctx.set_zoom_factor(startup.settings.zoom);
+        // A wheel notch scrolls 100 points instead of egui's 40, as far as
+        // Chromium scrolls with the default three lines per notch.
+        ctx.options_mut(|o| o.input_options.line_scroll_speed = 100.0);
         let (base_fonts, fonts) = style::load_fonts();
         ctx.set_fonts(base_fonts.clone());
         egui_extras::install_image_loaders(&ctx);
@@ -617,7 +620,8 @@ impl App {
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
-        let page = (tab.view.viewport_height - 60.0).max(40.0);
+        // Chromium's steps: 87.5 % of the view for a page, 40 px for a line.
+        let page = (tab.view.viewport_height * 0.875).max(40.0);
         let line = BODY_SIZE * 2.5;
         ctx.input_mut(|i| {
             let mut delta = 0.0;
