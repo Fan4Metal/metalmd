@@ -1,0 +1,44 @@
+[package]
+name = "qmarkdown"
+version = "0.1.0"
+edition = "2024"
+description = "Fast native Markdown viewer"
+license = "MIT"
+rust-version = "1.95"
+
+[dependencies]
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+egui = "0.36.2"
+egui_extras = { version = "0.36.2", features = ["image", "file", "http", "svg", "gif", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+comrak = { version = "0.56.0", default-features = false }
+regex = "1"
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "dump-load", "regex-fancy"] }
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
+notify = "8.2"
+interprocess = "2.4.4"
+rfd = "0.17.2"
+directories = "6.0.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+encoding_rs = "0.8.42"
+chardetng = "1.0.0"
+open = "5.4.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 2
