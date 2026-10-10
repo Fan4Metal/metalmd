@@ -23,14 +23,6 @@ impl ThemeSetting {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            ThemeSetting::System => "Auto",
-            ThemeSetting::Light => "Light",
-            ThemeSetting::Dark => "Dark",
-        }
-    }
-
     pub fn preference(self) -> egui::ThemePreference {
         match self {
             ThemeSetting::System => egui::ThemePreference::System,
@@ -71,7 +63,8 @@ impl Default for Settings {
     }
 }
 
-fn settings_path() -> Option<PathBuf> {
+/// Where the settings are kept.
+pub fn settings_path() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "qmarkdown")
         .map(|dirs| dirs.config_dir().join("settings.json"))
 }

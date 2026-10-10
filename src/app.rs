@@ -8,6 +8,7 @@ use crate::markdown::preprocess::{heading_anchor_id, is_markdown_path, percent_d
 use crate::settings::{Settings, same_path};
 use crate::single_instance::Server;
 use crate::style::{self, BODY_SIZE, FontChoice, Palette};
+use crate::ui::about::About;
 use crate::ui::find::FindState;
 use crate::ui::home::{self, HomeAction};
 use crate::ui::toc;
@@ -184,6 +185,8 @@ pub struct App {
     frame: u64,
     bench: Option<Bench>,
     title: String,
+    about: About,
+    start_icon: Option<egui::TextureHandle>,
 }
 
 impl App {
@@ -252,6 +255,8 @@ impl App {
             frame: 0,
             bench,
             title: String::new(),
+            about: About::default(),
+            start_icon: None,
         }
     }
 
@@ -546,6 +551,13 @@ impl App {
         let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
         let consume = |shortcut: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&shortcut));
 
+        if consume(plain(Key::F1)) {
+            self.about.toggle();
+        }
+        // The dialog takes the keyboard (Enter and Esc close it).
+        if self.about.open {
+            return;
+        }
         if consume(command(Key::F)) {
             if self.find.open {
                 self.find.request_focus = true;
@@ -650,6 +662,15 @@ impl App {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    // File actions first, where opening one adds its tab.
+                    if ui
+                        .button(RichText::new("Open").size(13.0))
+                        .on_hover_text("Open file (Ctrl+O)")
+                        .clicked()
+                    {
+                        open_dialog = true;
+                    }
+                    ui.separator();
                     for (i, tab) in self.tabs.iter().enumerate() {
                         let selected = i == self.active;
                         let mut title = RichText::new(&tab.title).size(13.5);
@@ -680,12 +701,15 @@ impl App {
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
-                        let theme = self.settings.theme;
                         if ui
-                            .button(RichText::new(theme.label()).size(13.0))
-                            .on_hover_text("Theme: Auto → Light → Dark")
+                            .button(RichText::new("About").size(13.0))
+                            .on_hover_text("About qmarkdown (F1)")
                             .clicked()
                         {
+                            self.about.toggle();
+                        }
+                        let theme = self.settings.theme;
+                        if crate::ui::theme_button(ui, theme).clicked() {
                             self.settings.theme = theme.next();
                             ui.ctx().set_theme(self.settings.theme.preference());
                             self.settings_dirty = true;
@@ -707,13 +731,6 @@ impl App {
                         {
                             self.settings.toc_visible = !self.settings.toc_visible;
                             self.settings_dirty = true;
-                        }
-                        if ui
-                            .button(RichText::new("Open").size(13.0))
-                            .on_hover_text("Open file (Ctrl+O)")
-                            .clicked()
-                        {
-                            open_dialog = true;
                         }
                         if let Some(tab) = self.tabs.get(self.active) {
                             let mut status = Vec::new();
@@ -953,7 +970,10 @@ impl eframe::App for App {
         CentralPanel::no_frame()
             .frame(Frame::new().fill(ui.visuals().panel_fill))
             .show(ui, |ui| match self.tabs.get_mut(self.active) {
-                None => home_action = home::show(ui, &self.settings.recent, &palette),
+                None => {
+                    home_action =
+                        home::show(ui, &self.settings.recent, &palette, &mut self.start_icon)
+                }
                 Some(tab) => {
                     if let Some(doc) = tab.doc.clone() {
                         let base_dir = tab.path.parent().map(Path::to_path_buf);
@@ -993,6 +1013,7 @@ impl eframe::App for App {
                     }
                 }
             });
+        self.about.show(&ctx);
         for action in actions {
             self.handle_action(&ctx, action);
         }
@@ -1002,7 +1023,6 @@ impl eframe::App for App {
             self.reload(self.active);
         }
         match home_action {
-            Some(HomeAction::OpenDialog) => self.open_dialog(&ctx),
             Some(HomeAction::Open(path)) => self.open_paths(&ctx, vec![path], false),
             None => {}
         }
