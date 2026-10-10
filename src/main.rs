@@ -9,6 +9,7 @@
 
 mod app;
 mod bench;
+mod caption;
 mod fs_text;
 mod icon;
 mod markdown;

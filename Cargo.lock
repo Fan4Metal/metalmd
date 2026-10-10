@@ -1587,6 +1587,7 @@ dependencies = [
  "interprocess",
  "notify",
  "open",
+ "raw-window-handle",
  "regex",
  "resvg",
  "rfd",

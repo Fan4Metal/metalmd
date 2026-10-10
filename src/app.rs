@@ -5,7 +5,7 @@ use crate::fs_text;
 use crate::markdown::document::{Block, Document, Scripts};
 use crate::markdown::highlight::Highlighter;
 use crate::markdown::preprocess::{heading_anchor_id, is_markdown_path, percent_decode};
-use crate::settings::{Settings, same_path};
+use crate::settings::{Settings, ThemeSetting, same_path};
 use crate::single_instance::Server;
 use crate::style::{self, BODY_SIZE, FontChoice, Palette};
 use crate::ui::about::About;
@@ -187,6 +187,12 @@ pub struct App {
     title: String,
     about: About,
     start_icon: Option<egui::TextureHandle>,
+    /// The window, for its caption (see `follow_theme`).
+    hwnd: Option<isize>,
+    /// The theme of the last frame.
+    shown_theme: Option<Theme>,
+    /// Repaint the window caption on this frame.
+    refresh_caption: bool,
 }
 
 impl App {
@@ -200,6 +206,18 @@ impl App {
 
         style::apply_visuals(&ctx);
         ctx.set_theme(startup.settings.theme.preference());
+        // The window is still hidden (eframe shows it after the first
+        // frame), so a caption set now is shown from the start; set after
+        // egui's first frame, Windows 10 would keep the caption of the
+        // Windows theme. Following Windows, winit has already done it.
+        let hwnd = crate::caption::hwnd(cc);
+        if let Some(hwnd) = hwnd {
+            match startup.settings.theme {
+                ThemeSetting::Dark => crate::caption::set_dark(hwnd, true),
+                ThemeSetting::Light => crate::caption::set_dark(hwnd, false),
+                ThemeSetting::System => {}
+            }
+        }
         ctx.set_zoom_factor(startup.settings.zoom);
         // A wheel notch scrolls 100 points instead of egui's 40, as far as
         // Chromium scrolls with the default three lines per notch.
@@ -262,7 +280,31 @@ impl App {
             title: String::new(),
             about: About::default(),
             start_icon: None,
+            hwnd,
+            shown_theme: None,
+            refresh_caption: false,
         }
+    }
+
+    /// Bring the window caption in line with the theme. egui passes a new
+    /// theme to the window at the end of the frame it changed in, and
+    /// Windows 10 shows it in the caption only at the next repaint of the
+    /// frame, so the frame after the change sets the caption and asks for
+    /// that repaint. This also covers Windows switching its theme while
+    /// the app follows it.
+    fn follow_theme(&mut self, ctx: &egui::Context) {
+        let theme = ctx.theme();
+        if std::mem::take(&mut self.refresh_caption)
+            && let Some(hwnd) = self.hwnd
+        {
+            crate::caption::set_dark(hwnd, theme == Theme::Dark);
+            crate::caption::refresh(hwnd);
+        }
+        if self.shown_theme.is_some_and(|t| t != theme) {
+            self.refresh_caption = true;
+            ctx.request_repaint();
+        }
+        self.shown_theme = Some(theme);
     }
 
     fn open_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>, focus_window: bool) {
@@ -1046,6 +1088,7 @@ impl eframe::App for App {
         }
 
         self.update_title(&ctx);
+        self.follow_theme(&ctx);
         let zoom = ctx.zoom_factor();
         if (zoom - self.settings.zoom).abs() > 0.001 {
             self.settings.zoom = zoom;
