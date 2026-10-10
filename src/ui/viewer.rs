@@ -1056,6 +1056,7 @@ fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) -> Response
     let Some(uri) = image_uri(&image.src, rc.base_dir) else {
         return fallback(ui, rc);
     };
+    let uri = super::animation::frame_uri(ui.ctx(), &uri).unwrap_or(uri);
     // Space before an image that follows text on the same row.
     let mut widget = egui::Image::new(uri)
         .show_loading_spinner(true)

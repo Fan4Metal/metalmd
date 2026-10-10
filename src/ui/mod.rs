@@ -1,6 +1,7 @@
 //! User interface pieces.
 
 pub mod about;
+pub mod animation;
 pub mod find;
 pub mod home;
 pub mod toc;

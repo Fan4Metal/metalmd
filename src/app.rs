@@ -204,6 +204,7 @@ impl App {
         let (base_fonts, fonts) = style::load_fonts();
         ctx.set_fonts(base_fonts.clone());
         egui_extras::install_image_loaders(&ctx);
+        crate::ui::animation::ApngLoader::install(&ctx);
         if let Some(b) = bench.as_mut() {
             b.mark("fonts_ready");
         }
