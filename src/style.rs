@@ -256,7 +256,7 @@ const FACES: FaceFiles = FaceFiles {
     symbols: &[],
 };
 
-fn font_path(name: &str) -> PathBuf {
+pub fn font_path(name: &str) -> PathBuf {
     #[cfg(windows)]
     {
         let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());

@@ -62,6 +62,7 @@ This file holds most of the subtle logic:
 - **Centered content and tables.** Centered rows with images, and centered or right-aligned table cells, cannot use egui's expanding layouts. They pad by width remembered from the previous frame in `ui.data`. `Grid` hands non-last cells the full `max_col_width`, so centered layouts would stretch columns.
 - **Images.** On Windows, egui_extras requires `file:///C:/…` (three slashes). Two slashes are parsed as a UNC host. See `file_uri`.
 - **Animation.** egui animates GIF/WebP only for URIs ending in `.gif`/`.webp`. `ui/animation.rs` covers the rest: `frame_uri` sniffs the loaded bytes (query-string URLs, extensionless GitHub `user-attachments` links, APNG) and picks `uri#frame` itself; `ApngLoader` decodes APNG; frame delays ≤ 10 ms play at 100 ms as in browsers.
+- **SVG.** egui_extras' `svg` feature is off: its loader takes only `.svg` URIs and draws no text. `ui/svg.rs` replaces it, sniffing SVG by bytes or media type (shields.io badges have no extension) and rendering text with resvg's `text` feature. Fonts (Verdana, Arial, Segoe UI…) are read on the first SVG that has `<text>`, never at startup.
 
 ### Other modules
 

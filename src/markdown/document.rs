@@ -682,9 +682,17 @@ impl InlineCtx {
         let style = style | self.base | self.html_style;
         let text: std::borrow::Cow<'_, str> = if self.collapse_whitespace {
             let mut collapsed = String::with_capacity(text.len());
-            let mut last_space = self.cur.text.is_empty()
-                || self.cur.text.ends_with([' ', '\n'])
-                || matches!(self.parts.last(), Some(Inline::Image(_)) if self.cur.text.is_empty());
+            // As in a browser, whitespace between two images is a space
+            // (README badge rows); at the start of a paragraph it is none.
+            let mut last_space = if self.cur.text.is_empty() {
+                match self.parts.last() {
+                    None => true,
+                    Some(Inline::Text(rich)) => rich.text.ends_with([' ', '\n']),
+                    Some(Inline::Image(_)) => false,
+                }
+            } else {
+                self.cur.text.ends_with([' ', '\n'])
+            };
             for c in text.chars() {
                 if c.is_whitespace() && c != '\u{a0}' {
                     if !last_space {
@@ -1261,6 +1269,27 @@ mod tests {
             }
         ));
         assert_eq!(doc.blocks.len(), 2, "{:?}", doc.blocks);
+    }
+
+    #[test]
+    fn html_badges_on_separate_lines_get_a_space_between() {
+        let doc = Document::parse(concat!(
+            "<p align=\"center\">\n",
+            "  <a href=\"x\"><img src=\"a.svg\" alt=\"A\"></a>\n",
+            "  <img src=\"b.svg\" alt=\"B\"><img src=\"c.svg\" alt=\"C\">\n",
+            "</p>\n",
+        ));
+        let Block::Paragraph { inlines, .. } = &doc.blocks[0] else {
+            panic!("{:?}", doc.blocks);
+        };
+        let shape: Vec<&str> = inlines
+            .iter()
+            .map(|inline| match inline {
+                Inline::Image(_) => "img",
+                Inline::Text(rich) => rich.text.as_str(),
+            })
+            .collect();
+        assert_eq!(shape, ["img", " ", "img", "img"]);
     }
 
     #[test]

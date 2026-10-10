@@ -703,6 +703,14 @@ fn draw_inlines(
         let mut wrapped = false;
         for inline in inlines {
             let rect = match inline {
+                // A space between images (a row of badges). As a label it
+                // would make the row taller and push the images after it down.
+                Inline::Text(rich) if rich.text == " " => {
+                    let font = egui::FontId::proportional(size);
+                    let width = ui.ctx().fonts_mut(|f| f.glyph_width(&font, ' '));
+                    ui.add_space(width);
+                    continue;
+                }
                 Inline::Text(rich) => {
                     // Not the height: in a row with a tall image egui makes
                     // the text's first row as tall as the image.
