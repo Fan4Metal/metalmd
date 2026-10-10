@@ -36,10 +36,14 @@ pub fn active_heading(doc: &Document, view: &ViewState) -> Option<usize> {
 pub fn show(ui: &mut Ui, doc: &Document, view: &ViewState, palette: &Palette) -> Option<usize> {
     let mut clicked = None;
     ui.add_space(10.0);
-    ui.label(RichText::new("CONTENTS").size(11.0).color(palette.muted));
+    ui.label(
+        RichText::new(tr!("CONTENTS", "СОДЕРЖАНИЕ"))
+            .size(11.0)
+            .color(palette.muted),
+    );
     ui.add_space(6.0);
     if doc.headings.is_empty() {
-        ui.label(RichText::new("No headings").color(palette.muted));
+        ui.label(RichText::new(tr!("No headings", "Нет заголовков")).color(palette.muted));
         return None;
     }
     let min_level = doc.headings.iter().map(|h| h.level).min().unwrap_or(1);

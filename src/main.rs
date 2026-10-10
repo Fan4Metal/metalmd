@@ -7,6 +7,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// First, so that `tr!` is in scope in the modules below.
+#[macro_use]
+mod i18n;
+
 mod app;
 mod bench;
 mod caption;
@@ -71,6 +75,7 @@ fn main() -> eframe::Result {
     }
 
     let settings = Settings::load();
+    i18n::set_lang(settings.language.resolve());
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("MetalMD")
         .with_app_id("metalmd")

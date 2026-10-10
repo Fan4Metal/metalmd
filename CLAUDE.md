@@ -75,5 +75,6 @@ This file holds most of the subtle logic:
 
 ## Conventions
 
+- Every user-visible string goes through `tr!("English", "Русский")` (`src/i18n.rs`, the scheme of qview). The language follows the Windows UI language (`i18n::system_lang`) unless chosen in About (`Settings::language`, `system`/`en`/`ru`); `main` sets it from the settings before the window is created, About applies a new choice at once. Strings are built every frame, so nothing caches translated text. Log messages, alert titles (`[!NOTE]` and others, as on GitHub) and file dialog type names stay English.
 - `src/markdown/preprocess.rs` and `src/fs_text.rs` contain BSD-3 code from Markpad. Keep their copyright headers, and update `THIRD_PARTY_LICENSES.md` if more Markpad code is ported.
 - Before claiming a performance change, check it with `--bench`. Run it several times and ignore the first, cold run.

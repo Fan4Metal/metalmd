@@ -527,7 +527,7 @@ impl App {
     fn open_dialog(&mut self, ctx: &egui::Context) {
         let mut dialog = rfd::FileDialog::new()
             .add_filter("Markdown", &["md", "markdown", "mdown", "mkd", "txt"])
-            .add_filter("All files", &["*"]);
+            .add_filter(tr!("All files", "Все файлы"), &["*"]);
         if let Some(dir) = self.tabs.get(self.active).and_then(|t| t.path.parent()) {
             dialog = dialog.set_directory(dir);
         }
@@ -712,8 +712,8 @@ impl App {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     // File actions first, where opening one adds its tab.
                     if ui
-                        .button(RichText::new("Open").size(13.0))
-                        .on_hover_text("Open file (Ctrl+O)")
+                        .button(RichText::new(tr!("Open", "Открыть")).size(13.0))
+                        .on_hover_text(tr!("Open file (Ctrl+O)", "Открыть файл (Ctrl+O)"))
                         .clicked()
                     {
                         open_dialog = true;
@@ -740,7 +740,7 @@ impl App {
                                 .small();
                         if ui
                             .add(close_button)
-                            .on_hover_text("Close (Ctrl+W)")
+                            .on_hover_text(tr!("Close (Ctrl+W)", "Закрыть (Ctrl+W)"))
                             .clicked()
                         {
                             close = Some(i);
@@ -767,7 +767,10 @@ impl App {
                         if (zoom - 1.0).abs() > 0.01
                             && ui
                                 .button(RichText::new(format!("{:.0}%", zoom * 100.0)).size(13.0))
-                                .on_hover_text("Reset zoom (Ctrl+0)")
+                                .on_hover_text(tr!(
+                                    "Reset zoom (Ctrl+0)",
+                                    "Сбросить масштаб (Ctrl+0)"
+                                ))
                                 .clicked()
                         {
                             ui.ctx().set_zoom_factor(1.0);
@@ -775,10 +778,12 @@ impl App {
                         if let Some(tab) = self.tabs.get(self.active) {
                             let mut status = Vec::new();
                             if tab.deleted {
-                                status.push("file deleted".to_owned());
+                                status.push(tr!("file deleted", "файл удалён").to_owned());
                             }
                             if tab.lossy {
-                                status.push("decoding errors".to_owned());
+                                status.push(
+                                    tr!("decoding errors", "ошибки декодирования").to_owned(),
+                                );
                             }
                             if !tab.encoding.is_empty() && tab.encoding != fs_text::UTF8_LABEL {
                                 status.push(tab.encoding.clone());
@@ -825,7 +830,7 @@ impl App {
                     let input = ui.add(
                         TextEdit::singleline(&mut self.find.query)
                             .id(Id::new("find-input"))
-                            .hint_text("Find in document")
+                            .hint_text(tr!("Find in document", "Найти в документе"))
                             .desired_width(280.0),
                     );
                     if self.find.request_focus {
@@ -849,24 +854,36 @@ impl App {
                     let status = if self.find.query.is_empty() {
                         String::new()
                     } else if count == 0 {
-                        "No results".to_owned()
+                        tr!("No results", "Не найдено").to_owned()
                     } else {
-                        format!("{} of {}", self.find.current + 1, count)
+                        let current = self.find.current + 1;
+                        tr!(
+                            format!("{current} of {count}"),
+                            format!("{current} из {count}")
+                        )
                     };
                     ui.label(RichText::new(status).size(12.5).color(palette.muted));
                     if ui
                         .button("↑")
-                        .on_hover_text("Previous (Shift+F3)")
+                        .on_hover_text(tr!("Previous (Shift+F3)", "Предыдущее (Shift+F3)"))
                         .clicked()
                     {
                         self.find.step(false);
                         self.find_jump = true;
                     }
-                    if ui.button("↓").on_hover_text("Next (F3, Enter)").clicked() {
+                    if ui
+                        .button("↓")
+                        .on_hover_text(tr!("Next (F3, Enter)", "Следующее (F3, Enter)"))
+                        .clicked()
+                    {
                         self.find.step(true);
                         self.find_jump = true;
                     }
-                    if ui.button("×").on_hover_text("Close (Esc)").clicked() {
+                    if ui
+                        .button("×")
+                        .on_hover_text(tr!("Close (Esc)", "Закрыть (Esc)"))
+                        .clicked()
+                    {
                         self.find.close();
                     }
                 });
@@ -1036,14 +1053,20 @@ impl eframe::App for App {
                     } else if let Some(error) = &tab.error {
                         ui.vertical_centered(|ui| {
                             ui.add_space(80.0);
-                            ui.label(RichText::new("Could not open the file").size(18.0));
+                            ui.label(
+                                RichText::new(tr!(
+                                    "Could not open the file",
+                                    "Не удалось открыть файл"
+                                ))
+                                .size(18.0),
+                            );
                             ui.add_space(6.0);
                             ui.label(
                                 RichText::new(tab.path.display().to_string()).color(palette.muted),
                             );
                             ui.label(RichText::new(error).color(palette.muted));
                             ui.add_space(12.0);
-                            retry = ui.button("Retry").clicked();
+                            retry = ui.button(tr!("Retry", "Повторить")).clicked();
                         });
                     } else {
                         ui.vertical_centered(|ui| {
@@ -1053,7 +1076,11 @@ impl eframe::App for App {
                     }
                 }
             });
-        self.about.show(&ctx);
+        let lang = self.settings.language;
+        self.about.show(&ctx, &mut self.settings.language);
+        if self.settings.language != lang {
+            self.settings_dirty = true;
+        }
         for action in actions {
             self.handle_action(&ctx, action);
         }
@@ -1081,7 +1108,7 @@ impl eframe::App for App {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Drop to open",
+                tr!("Drop to open", "Отпустите, чтобы открыть"),
                 egui::FontId::proportional(26.0),
                 Color32::WHITE,
             );

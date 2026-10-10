@@ -1,5 +1,6 @@
 //! User settings and recent files, stored as JSON in the config directory.
 
+use crate::i18n::LangChoice;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -48,6 +49,8 @@ pub struct Settings {
     pub theme: ThemeSetting,
     pub zoom: f32,
     pub toc_visible: bool,
+    /// Interface language, chosen in About.
+    pub language: LangChoice,
     pub recent: Vec<PathBuf>,
     pub window: Option<WindowGeometry>,
 }
@@ -58,6 +61,7 @@ impl Default for Settings {
             theme: ThemeSetting::System,
             zoom: 1.0,
             toc_visible: true,
+            language: LangChoice::System,
             recent: Vec::new(),
             window: None,
         }

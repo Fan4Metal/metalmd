@@ -37,13 +37,23 @@ pub fn show(
                 ui.image((icon.id(), egui::vec2(ICON, ICON)));
                 ui.add_space(14.0);
                 ui.label(RichText::new("MetalMD").size(30.0).strong());
-                ui.weak(format!("Version {}", crate::VERSION));
+                ui.weak(tr!(
+                    format!("Version {}", crate::VERSION),
+                    format!("Версия {}", crate::VERSION)
+                ));
                 ui.add_space(18.0);
-                ui.label("Open a Markdown file with Ctrl+O or drop it here");
+                ui.label(tr!(
+                    "Open a Markdown file with Ctrl+O or drop it here",
+                    "Откройте файл Markdown через Ctrl+O или перетащите его сюда"
+                ));
                 if !recent.is_empty() {
                     ui.add_space(32.0);
                     ui.set_max_width(520.0);
-                    ui.label(RichText::new("RECENT").size(11.0).color(palette.muted));
+                    ui.label(
+                        RichText::new(tr!("RECENT", "НЕДАВНИЕ"))
+                            .size(11.0)
+                            .color(palette.muted),
+                    );
                     ui.add_space(6.0);
                     for path in recent {
                         if let Some(clicked) = recent_entry(ui, path, palette) {
@@ -76,9 +86,14 @@ fn clear_recent(ui: &mut Ui, palette: &Palette) -> bool {
     let color = if hovered { palette.link } else { palette.muted };
     let response = ui
         .add(
-            Label::new(RichText::new("Clear recent").size(12.0).color(color)).sense(Sense::click()),
+            Label::new(
+                RichText::new(tr!("Clear recent", "Очистить список"))
+                    .size(12.0)
+                    .color(color),
+            )
+            .sense(Sense::click()),
         )
-        .on_hover_text("Forget the recent files");
+        .on_hover_text(tr!("Forget the recent files", "Забыть недавние файлы"));
     if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }

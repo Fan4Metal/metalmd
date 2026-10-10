@@ -32,6 +32,7 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 - **Live reload**: a file changed on disk is reloaded at the same scroll position.
 - **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied.
 - **Light, dark or system theme**, and zoom.
+- **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`).
 - **Any encoding**: UTF-8, UTF-16 and legacy code pages (Windows-1251, GBK, Shift_JIS and others) are detected automatically.
 - **One window**: a file opened while MetalMD is running goes to a new tab of the open window.
 - **Portable**: the [portable archive](#installation) keeps its settings next to the program.

@@ -368,7 +368,7 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
         Block::Math { id, tex } => draw_code(ui, *id, None, "math", tex, rc, salt),
         Block::FrontMatter { id, yaml } => {
             egui::CollapsingHeader::new(
-                egui::RichText::new("Front matter").color(rc.palette.muted),
+                egui::RichText::new(tr!("Front matter", "Метаданные")).color(rc.palette.muted),
             )
             .id_salt(("front-matter", salt))
             .default_open(false)
@@ -1222,7 +1222,11 @@ fn draw_code(
         let copied_at: Option<f64> = ui.data(|d| d.get_temp(copied_id));
         let now = ui.input(|i| i.time);
         let recently = copied_at.is_some_and(|t| now - t < 1.5);
-        let text = if recently { "Copied" } else { "Copy" };
+        let text = if recently {
+            tr!("Copied", "Скопировано")
+        } else {
+            tr!("Copy", "Копировать")
+        };
         let button = egui::Button::new(egui::RichText::new(text).size(12.0)).corner_radius(4);
         if ui.put(button_rect, button).clicked() {
             ui.ctx().copy_text(code.to_owned());

@@ -65,9 +65,15 @@ fn icon_button(
 pub fn toc_button(ui: &mut Ui, visible: bool) -> Response {
     use egui::{Stroke, vec2};
     let tip = if visible {
-        "Hide the table of contents (Ctrl+Shift+O)"
+        tr!(
+            "Hide the table of contents (Ctrl+Shift+O)",
+            "Скрыть содержание (Ctrl+Shift+O)"
+        )
     } else {
-        "Show the table of contents (Ctrl+Shift+O)"
+        tr!(
+            "Show the table of contents (Ctrl+Shift+O)",
+            "Показать содержание (Ctrl+Shift+O)"
+        )
     };
     icon_button(ui, "toc_icon", visible, tip, |painter, c, color, _| {
         for (y, indent) in [(-4.0, 0.0), (0.0, 3.0), (4.0, 3.0)] {
@@ -87,7 +93,7 @@ pub fn about_button(ui: &mut Ui) -> Response {
         ui,
         "about_icon",
         false,
-        "About MetalMD (F1)",
+        tr!("About MetalMD (F1)", "О программе MetalMD (F1)"),
         |painter, c, color, _| {
             painter.circle_stroke(c, 6.0, Stroke::new(1.3, color));
             painter.circle_filled(c + vec2(0.0, -2.8), 0.95, color);
@@ -104,9 +110,18 @@ pub fn about_button(ui: &mut Ui) -> Response {
 /// next of the three.
 pub fn theme_button(ui: &mut Ui, theme: ThemeSetting) -> Response {
     let tip = match theme {
-        ThemeSetting::System => "Theme: as in Windows (click: light)",
-        ThemeSetting::Light => "Theme: light (click: dark)",
-        ThemeSetting::Dark => "Theme: dark (click: as in Windows)",
+        ThemeSetting::System => tr!(
+            "Theme: as in Windows (click: light)",
+            "Тема: как в Windows (щелчок: светлая)"
+        ),
+        ThemeSetting::Light => tr!(
+            "Theme: light (click: dark)",
+            "Тема: светлая (щелчок: тёмная)"
+        ),
+        ThemeSetting::Dark => tr!(
+            "Theme: dark (click: as in Windows)",
+            "Тема: тёмная (щелчок: как в Windows)"
+        ),
     };
     icon_button(ui, "theme_icon", false, tip, |painter, c, color, fill| {
         paint_theme_icon(painter, c, color, fill, theme);
@@ -164,5 +179,5 @@ pub fn close_cross(ui: &mut Ui) -> bool {
         .line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
     ui.painter()
         .line_segment([c + egui::vec2(-r, r), c + egui::vec2(r, -r)], stroke);
-    response.on_hover_text("Close").clicked()
+    response.on_hover_text(tr!("Close", "Закрыть")).clicked()
 }
