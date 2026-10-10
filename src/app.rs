@@ -705,7 +705,7 @@ impl App {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         if ui
                             .button(RichText::new("About").size(13.0))
-                            .on_hover_text("About qmarkdown (F1)")
+                            .on_hover_text("About MetalMD (F1)")
                             .clicked()
                         {
                             self.about.toggle();
@@ -860,8 +860,8 @@ impl App {
 
     fn update_title(&mut self, ctx: &egui::Context) {
         let title = match self.tabs.get(self.active) {
-            Some(tab) => format!("{} — qmarkdown", tab.title),
-            None => "qmarkdown".to_owned(),
+            Some(tab) => format!("{} — MetalMD", tab.title),
+            None => "MetalMD".to_owned(),
         };
         if title != self.title {
             ctx.send_viewport_cmd(ViewportCommand::Title(title.clone()));

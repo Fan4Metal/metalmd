@@ -52,7 +52,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: qmarkdown-${{ steps.version.outputs.version }}
+          name: metalmd-${{ steps.version.outputs.version }}
           path: |
             dist/*_Setup.exe
             dist/*_portable.zip
@@ -62,7 +62,7 @@ jobs:
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
-          name: qmarkdown ${{ steps.version.outputs.version }}
+          name: MetalMD ${{ steps.version.outputs.version }}
           files: |
             dist/*_Setup.exe
             dist/*_portable.zip

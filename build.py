@@ -3,12 +3,12 @@
 # dependencies = ["psutil"]
 # ///
 r"""
-Release build: cargo build --release (target\release\qmarkdown.exe).
+Release build: cargo build --release (target\release\metalmd.exe).
 
-A qmarkdown.exe running from this project's target folder locks the file and
+A metalmd.exe running from this project's target folder locks the file and
 makes the link fail, so it is closed first: politely (the window gets
 WM_CLOSE and saves its settings), then by force if it has not exited within
-3 seconds. Copies of qmarkdown elsewhere are left alone.
+3 seconds. Copies of MetalMD elsewhere are left alone.
 
 Run from any folder: uv run build.py [extra cargo arguments]
 """
@@ -24,19 +24,19 @@ TARGET = ROOT / "target"
 
 
 def is_ours(proc: psutil.Process) -> bool:
-    """Whether `proc` is a qmarkdown.exe started from this project's target folder."""
+    """Whether `proc` is a metalmd.exe started from this project's target folder."""
     try:
         exe = Path(proc.exe())
     except (psutil.Error, OSError):
         return False
-    return exe.name.lower() == "qmarkdown.exe" and TARGET in exe.resolve().parents
+    return exe.name.lower() == "metalmd.exe" and TARGET in exe.resolve().parents
 
 
 def close_running() -> None:
     for proc in psutil.process_iter():
         if not is_ours(proc):
             continue
-        print(f"Closing qmarkdown.exe (PID {proc.pid})", flush=True)
+        print(f"Closing metalmd.exe (PID {proc.pid})", flush=True)
         # taskkill without /F sends WM_CLOSE, as the window's close button does.
         subprocess.run(["taskkill", "/PID", str(proc.pid)], capture_output=True)
         try:

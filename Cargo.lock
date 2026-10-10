@@ -1573,6 +1573,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "metalmd"
+version = "0.1.0"
+dependencies = [
+ "chardetng",
+ "comrak",
+ "directories",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "encoding_rs",
+ "image",
+ "interprocess",
+ "notify",
+ "open",
+ "regex",
+ "resvg",
+ "rfd",
+ "serde",
+ "serde_json",
+ "syntect",
+ "two-face",
+ "windows-sys 0.61.2",
+ "winresource",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2355,32 +2381,6 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
-
-[[package]]
-name = "qmarkdown"
-version = "0.1.0"
-dependencies = [
- "chardetng",
- "comrak",
- "directories",
- "eframe",
- "egui",
- "egui_extras",
- "encoding_rs",
- "image",
- "interprocess",
- "notify",
- "open",
- "regex",
- "resvg",
- "rfd",
- "serde",
- "serde_json",
- "syntect",
- "two-face",
- "windows-sys 0.61.2",
- "winresource",
-]
 
 [[package]]
 name = "quick-error"

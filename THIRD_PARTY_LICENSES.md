@@ -2,7 +2,7 @@
 
 ## Markpad
 
-qmarkdown is a rewrite of the viewing part of [Markpad](https://github.com/sftwrdotdev/Markpad).
+MetalMD is a rewrite of the viewing part of [Markpad](https://github.com/sftwrdotdev/Markpad).
 The following files contain code ported from Markpad's `src-tauri/src/markdown.rs`
 and `src-tauri/src/fs_safety.rs`, together with their tests:
 

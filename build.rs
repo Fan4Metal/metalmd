@@ -28,8 +28,8 @@ fn main() {
     {
         let mut res = winresource::WindowsResource::new();
         res.set_icon(ico_path.to_str().unwrap())
-            .set("FileDescription", "qmarkdown - Markdown viewer")
-            .set("ProductName", "qmarkdown")
+            .set("FileDescription", "MetalMD - Markdown viewer")
+            .set("ProductName", "MetalMD")
             .set("LegalCopyright", "Copyright (C) 2026 Fan4_Metal");
         if let Err(e) = res.compile() {
             // A missing resource compiler must not break the build.

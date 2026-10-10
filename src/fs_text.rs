@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn read_to_string_lossy_reads_a_legacy_file_from_disk() {
         let path = std::env::temp_dir().join(format!(
-            "qmarkdown-gbk-{}-{}.md",
+            "metalmd-gbk-{}-{}.md",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

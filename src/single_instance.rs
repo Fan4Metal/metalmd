@@ -19,10 +19,10 @@ fn socket_name() -> std::io::Result<Name<'static>> {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
     if GenericNamespaced::is_supported() {
-        format!("qmarkdown-{user}.sock").to_ns_name::<GenericNamespaced>()
+        format!("metalmd-{user}.sock").to_ns_name::<GenericNamespaced>()
     } else {
         std::env::temp_dir()
-            .join(format!("qmarkdown-{user}.sock"))
+            .join(format!("metalmd-{user}.sock"))
             .to_fs_name::<GenericFilePath>()
             .map(|n| n.into_owned())
     }

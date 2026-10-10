@@ -1,11 +1,11 @@
-; qmarkdown installer (Inno Setup 6).
+; MetalMD installer (Inno Setup 6).
 ; Built by tools\make_release.py, which passes the version and the icon path:
 ;   ISCC /DMyAppVersion=0.1.0 /DVersionInfoVersion=0.1.0.0 /DAppIcon=..\target\app.ico tools\setup.iss
 
-#define MyAppName "qmarkdown"
-#define MyAppExeName "qmarkdown.exe"
+#define MyAppName "MetalMD"
+#define MyAppExeName "metalmd.exe"
 #define MyAppPublisher "Fan4_Metal"
-#define MyProgId "qmarkdown.md"
+#define MyProgId "MetalMD.md"
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
@@ -30,7 +30,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=qmarkdown_{#MyAppVersion}_Setup
+OutputBaseFilename=MetalMD_{#MyAppVersion}_Setup
 SetupIconFile={#AppIcon}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 LicenseFile=..\LICENSE
@@ -49,14 +49,14 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 [CustomMessages]
 english.AssocGroup=File types:
 russian.AssocGroup=Типы файлов:
-english.AssocTask=Register qmarkdown for Markdown files (.md, .markdown, .mdown, .mkd)
-russian.AssocTask=Зарегистрировать qmarkdown для файлов Markdown (.md, .markdown, .mdown, .mkd)
+english.AssocTask=Register MetalMD for Markdown files (.md, .markdown, .mdown, .mkd)
+russian.AssocTask=Зарегистрировать MetalMD для файлов Markdown (.md, .markdown, .mdown, .mkd)
 english.DocType=Markdown document
 russian.DocType=Документ Markdown
 english.AppDescription=Fast Markdown viewer
 russian.AppDescription=Быстрый просмотр Markdown
-english.ChooseDefault=Choose qmarkdown as the default program for Markdown (opens Windows Settings)
-russian.ChooseDefault=Выбрать qmarkdown программой по умолчанию для Markdown (откроются параметры Windows)
+english.ChooseDefault=Choose MetalMD as the default program for Markdown (opens Windows Settings)
+russian.ChooseDefault=Выбрать MetalMD программой по умолчанию для Markdown (откроются параметры Windows)
 
 [Tasks]
 Name: "assoc"; Description: "{cm:AssocTask}"; GroupDescription: "{cm:AssocGroup}"
@@ -77,7 +77,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Registry]
 ; The file types, under HKCU as the installation needs no administrator
 ; rights; removed on uninstall. Windows lets only the user choose the default
-; program, so these add qmarkdown to "Open with" and to Default apps, and the
+; program, so these add MetalMD to "Open with" and to Default apps, and the
 ; last page offers to open Settings for the choice.
 ; The ProgID.
 Root: HKCU; Subkey: "Software\Classes\{#MyProgId}"; ValueType: string; ValueName: ""; ValueData: "{cm:DocType}"; Flags: uninsdeletekey; Tasks: assoc
@@ -95,7 +95,7 @@ Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\SupportedType
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\SupportedTypes"; ValueType: string; ValueName: ".markdown"; ValueData: ""; Tasks: assoc
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\SupportedTypes"; ValueType: string; ValueName: ".mdown"; ValueData: ""; Tasks: assoc
 Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\SupportedTypes"; ValueType: string; ValueName: ".mkd"; ValueData: ""; Tasks: assoc
-; Default apps capabilities (ms-settings:defaultapps?registeredAppUser=qmarkdown).
+; Default apps capabilities (ms-settings:defaultapps?registeredAppUser=MetalMD).
 Root: HKCU; Subkey: "Software\{#MyAppName}"; Flags: uninsdeletekeyifempty; Tasks: assoc
 Root: HKCU; Subkey: "Software\{#MyAppName}\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#MyAppName}"; Flags: uninsdeletekey; Tasks: assoc
 Root: HKCU; Subkey: "Software\{#MyAppName}\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "{cm:AppDescription}"; Tasks: assoc

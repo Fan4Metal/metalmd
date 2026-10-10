@@ -67,7 +67,7 @@ impl Default for Settings {
 /// Settings file that makes a copy portable: when it lies next to the exe
 /// (even empty) and can be written, the settings are kept in it instead of
 /// the user profile. The portable zip ships an empty one.
-pub const PORTABLE_FILE: &str = "qmarkdown.json";
+pub const PORTABLE_FILE: &str = "metalmd.json";
 
 /// Where the settings of this run are kept.
 #[derive(Debug)]
@@ -91,7 +91,7 @@ pub fn location() -> &'static Location {
                 portable: true,
             },
             None => Location {
-                file: directories::ProjectDirs::from("", "", "qmarkdown")
+                file: directories::ProjectDirs::from("", "", "MetalMD")
                     .map(|dirs| dirs.config_dir().join("settings.json")),
                 portable: false,
             },

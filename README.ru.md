@@ -1,22 +1,22 @@
 <p align="center">
-  <img src="images/icon.png" width="128" height="128" alt="Иконка qmarkdown">
+  <img src="images/icon.png" width="128" height="128" alt="Иконка MetalMD">
 </p>
 
-<h1 align="center">qmarkdown</h1>
+<h1 align="center">MetalMD</h1>
 
 <p align="center">Быстрый нативный просмотрщик Markdown для Windows</p>
 
 <p align="center">
-  <a href="https://github.com/Fan4Metal/qmarkdown/releases/latest"><img src="https://img.shields.io/github/v/release/Fan4Metal/qmarkdown?label=%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F" alt="Последняя версия"></a>
+  <a href="https://github.com/Fan4Metal/metalmd/releases/latest"><img src="https://img.shields.io/github/v/release/Fan4Metal/metalmd?label=%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F" alt="Последняя версия"></a>
   <img src="https://img.shields.io/badge/Windows-10%2B-0078D6" alt="Windows 10 и новее">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Fan4Metal/qmarkdown?label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F" alt="Лицензия MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Fan4Metal/metalmd?label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F" alt="Лицензия MIT"></a>
 </p>
 
 <p align="center"><a href="README.md">English</a> | <b>Русский</b></p>
 
-qmarkdown показывает Markdown-документ примерно через 0,2 с после двойного щелчка. Редактировать документы он не умеет. Это переписанная на Rust часть [Markpad](https://github.com/sftwrdotdev/Markpad), отвечающая за просмотр. Markpad построен на Tauri и SvelteKit: при запуске он поднимает WebView2 и загружает JS-бандл с Monaco, KaTeX и Mermaid. qmarkdown рисует документ сам через [egui](https://github.com/emilk/egui) и OpenGL, без браузерного движка. Файл открывают в любимом редакторе, а qmarkdown обновляет вид при каждом сохранении.
+MetalMD показывает Markdown-документ примерно через 0,2 с после двойного щелчка. Редактировать документы он не умеет. Это переписанная на Rust часть [Markpad](https://github.com/sftwrdotdev/Markpad), отвечающая за просмотр. Markpad построен на Tauri и SvelteKit: при запуске он поднимает WebView2 и загружает JS-бандл с Monaco, KaTeX и Mermaid. MetalMD рисует документ сам через [egui](https://github.com/emilk/egui) и OpenGL, без браузерного движка. Файл открывают в любимом редакторе, а MetalMD обновляет вид при каждом сохранении.
 
-![qmarkdown показывает документ: слева оглавление, справа выноска, список задач, таблица и блок кода с подсветкой](images/screenshot.png)
+![MetalMD показывает документ: слева оглавление, справа выноска, список задач, таблица и блок кода с подсветкой](images/screenshot.png)
 
 *Снимок экрана версии 0.1.0.*
 
@@ -33,7 +33,7 @@ qmarkdown показывает Markdown-документ примерно чер
 - **Поиск** по документу через `Ctrl+F`. Текст можно выделить сразу в нескольких абзацах и скопировать.
 - **Светлая, тёмная или системная тема** и масштаб.
 - **Любая кодировка**: UTF-8, UTF-16 и устаревшие кодовые страницы (Windows-1251, GBK, Shift_JIS и другие) определяются автоматически.
-- **Одно окно**: файл, открытый при запущенном qmarkdown, попадает в новую вкладку уже открытого окна.
+- **Одно окно**: файл, открытый при запущенном MetalMD, попадает в новую вкладку уже открытого окна.
 - **Портативность**: [портативный архив](#установка) хранит настройки рядом с программой.
 
 ## Поддержка Markdown
@@ -58,11 +58,11 @@ qmarkdown показывает Markdown-документ примерно чер
 
 ## Установка
 
-Инсталлятор и портативный архив выложены на странице [Releases](https://github.com/Fan4Metal/qmarkdown/releases).
+Инсталлятор и портативный архив выложены на странице [Releases](https://github.com/Fan4Metal/metalmd/releases).
 
-Инсталлятору `qmarkdown_<версия>_Setup.exe` не нужны права администратора: программа ставится в `%LOCALAPPDATA%\Programs\qmarkdown`. Пункт «Зарегистрировать qmarkdown для файлов Markdown» включён по умолчанию (см. [Ассоциации файлов](#ассоциации-файлов)). Если он включён, последняя страница инсталлятора предлагает открыть параметры Windows, где qmarkdown можно выбрать программой по умолчанию. При удалении регистрация снимается.
+Инсталлятору `MetalMD_<версия>_Setup.exe` не нужны права администратора: программа ставится в `%LOCALAPPDATA%\Programs\MetalMD`. Пункт «Зарегистрировать MetalMD для файлов Markdown» включён по умолчанию (см. [Ассоциации файлов](#ассоциации-файлов)). Если он включён, последняя страница инсталлятора предлагает открыть параметры Windows, где MetalMD можно выбрать программой по умолчанию. При удалении регистрация снимается.
 
-Портативный архив `qmarkdown_<версия>_portable.zip` содержит программу в папке `qmarkdown` и работает без установки. В нём также лежит пустой файл `qmarkdown.json`. Пока этот файл находится рядом с `qmarkdown.exe` и в папку можно писать, настройки и недавние файлы хранятся в нём, поэтому программу можно носить на флешке. Без этого файла они хранятся в `%APPDATA%\qmarkdown\config\settings.json`, как у установленной программы. Где лежат настройки, видно в окне «О программе».
+Портативный архив `MetalMD_<версия>_portable.zip` содержит программу в папке `MetalMD` и работает без установки. В нём также лежит пустой файл `metalmd.json`. Пока этот файл находится рядом с `metalmd.exe` и в папку можно писать, настройки и недавние файлы хранятся в нём, поэтому программу можно носить на флешке. Без этого файла они хранятся в `%APPDATA%\MetalMD\config\settings.json`, как у установленной программы. Где лежат настройки, видно в окне «О программе».
 
 ## Горячие клавиши
 
@@ -84,10 +84,10 @@ qmarkdown показывает Markdown-документ примерно чер
 ## Использование
 
 ```
-qmarkdown.exe [ФАЙЛ...] [--new-instance]
+metalmd.exe [ФАЙЛ...] [--new-instance]
 ```
 
-Каждый файл открывается во вкладке. Если qmarkdown уже запущен, файлы получает открытое окно и выходит на передний план. С `--new-instance` открывается отдельное окно.
+Каждый файл открывается во вкладке. Если MetalMD уже запущен, файлы получает открытое окно и выходит на передний план. С `--new-instance` открывается отдельное окно.
 
 Ссылки на другие Markdown-файлы (`.md`, `.markdown`, `.mdown`, `.mkd`, `.txt`) открываются в новой вкладке на заголовке или блоке, указанном после `#`. Ссылки `#якорь` прокручивают документ. Остальные ссылки открываются в программе по умолчанию.
 
@@ -97,9 +97,9 @@ qmarkdown.exe [ФАЙЛ...] [--new-instance]
 
 ## Ассоциации файлов
 
-Пункт инсталлятора «Зарегистрировать qmarkdown для файлов Markdown» регистрирует `.md`, `.markdown`, `.mdown` и `.mkd` для текущего пользователя. После этого qmarkdown появляется в меню «Открыть с помощью» и в «Параметры» → «Приложения по умолчанию». Программу по умолчанию Windows разрешает выбрать только самому пользователю. Для этого инсталлятор предлагает открыть параметры, или qmarkdown можно выбрать при первом открытии Markdown-файла.
+Пункт инсталлятора «Зарегистрировать MetalMD для файлов Markdown» регистрирует `.md`, `.markdown`, `.mdown` и `.mkd` для текущего пользователя. После этого MetalMD появляется в меню «Открыть с помощью» и в «Параметры» → «Приложения по умолчанию». Программу по умолчанию Windows разрешает выбрать только самому пользователю. Для этого инсталлятор предлагает открыть параметры, или MetalMD можно выбрать при первом открытии Markdown-файла.
 
-Без инсталлятора: в контекстном меню `.md`-файла выберите «Открыть с помощью» → «Выбрать другое приложение» → `qmarkdown.exe` → «Всегда использовать это приложение».
+Без инсталлятора: в контекстном меню `.md`-файла выберите «Открыть с помощью» → «Выбрать другое приложение» → `metalmd.exe` → «Всегда использовать это приложение».
 
 ## Скорость запуска
 
@@ -120,7 +120,7 @@ qmarkdown.exe [ФАЙЛ...] [--new-instance]
 Замер на своей машине:
 
 ```
-qmarkdown.exe --bench timings.json путь\к\файлу.md
+metalmd.exe --bench timings.json путь\к\файлу.md
 ```
 
 Программа откроет файл, запишет отметки времени в миллисекундах с момента создания процесса и закроется.
@@ -130,11 +130,11 @@ qmarkdown.exe --bench timings.json путь\к\файлу.md
 Нужны Windows 10 или новее, стабильный Rust 1.95 или новее с тулчейном MSVC и Visual Studio 2022 Build Tools. Для запуска `build.py` нужен ещё [uv](https://docs.astral.sh/uv/).
 
 ```
-uv run build.py          # target\release\qmarkdown.exe
+uv run build.py          # target\release\metalmd.exe
 cargo test
 ```
 
-`build.py` сначала закрывает `qmarkdown.exe`, запущенный из папки `target` проекта, иначе файл занят. Затем он запускает `cargo build --release`, дополнительные аргументы передаются cargo. Единственную зависимость, `psutil`, ставит uv. Если qmarkdown не запущен, подойдёт и обычный `cargo build --release`. C-рантайм вшит в exe (`.cargo/config.toml`), поэтому программе не нужно ничего, кроме самой Windows.
+`build.py` сначала закрывает `metalmd.exe`, запущенный из папки `target` проекта, иначе файл занят. Затем он запускает `cargo build --release`, дополнительные аргументы передаются cargo. Единственную зависимость, `psutil`, ставит uv. Если MetalMD не запущен, подойдёт и обычный `cargo build --release`. C-рантайм вшит в exe (`.cargo/config.toml`), поэтому программе не нужно ничего, кроме самой Windows.
 
 <details>
 <summary>Устройство исходников</summary>
@@ -180,7 +180,7 @@ python tools/make_release.py --no-tests   # то же без cargo test
 python tools/make_release.py --install    # затем тихая установка поверх установленной копии
 ```
 
-Файлы попадают в `dist`, версия берётся из `Cargo.toml`. Как и `build.py`, скрипт сначала закрывает `qmarkdown.exe`, запущенный из `target\release`. Скрипт инсталлятора — `tools/setup.iss`. Иконку для инсталлятора записывает `qmarkdown.exe --export-icon <file.ico>`.
+Файлы попадают в `dist`, версия берётся из `Cargo.toml`. Как и `build.py`, скрипт сначала закрывает `metalmd.exe`, запущенный из `target\release`. Скрипт инсталлятора — `tools/setup.iss`. Иконку для инсталлятора записывает `metalmd.exe --export-icon <file.ico>`.
 
 Релизы на GitHub собирает workflow **Release** (`.github/workflows/release.yml`). Обновите версию в `Cargo.toml`, закоммитьте её и отправьте тег с той же версией. Workflow опубликует релиз с инсталлятором и портативным архивом:
 
@@ -193,7 +193,7 @@ git push origin v0.1.0
 
 ## На чём сделано
 
-qmarkdown построен на открытых проектах:
+MetalMD построен на открытых проектах:
 
 - [Markpad](https://github.com/sftwrdotdev/Markpad): диалект Markdown, предобработка, определение кодировки;
 - [egui / eframe](https://github.com/emilk/egui): интерфейс и окно;

@@ -1,4 +1,4 @@
-# The C runtime linked into the exe: no VCRUNTIME140.dll, so qmarkdown
+# The C runtime linked into the exe: no VCRUNTIME140.dll, so MetalMD
 # starts on a Windows without the Visual C++ Redistributable. About 100 KB.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]

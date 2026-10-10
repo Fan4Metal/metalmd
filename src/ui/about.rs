@@ -46,7 +46,7 @@ impl About {
                 ui.add_space(4.0);
                 ui.image((icon.id(), egui::vec2(ICON, ICON)));
                 ui.add_space(6.0);
-                ui.heading("qmarkdown");
+                ui.heading("MetalMD");
                 ui.label(format!("Version {}", crate::VERSION));
                 ui.add_space(8.0);
                 ui.label("A fast Markdown viewer for Windows.");

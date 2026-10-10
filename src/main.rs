@@ -1,4 +1,4 @@
-//! qmarkdown: a fast native Markdown viewer.
+//! MetalMD: a fast native Markdown viewer.
 //!
 //! Startup is ordered for the time-to-document: the files named on the command
 //! line are read and parsed on background threads while the window is being
@@ -71,8 +71,8 @@ fn main() -> eframe::Result {
 
     let settings = Settings::load();
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("qmarkdown")
-        .with_app_id("qmarkdown")
+        .with_title("MetalMD")
+        .with_app_id("metalmd")
         .with_min_inner_size([420.0, 300.0])
         .with_drag_and_drop(true)
         .with_icon(Arc::new(egui::IconData {
@@ -124,7 +124,7 @@ fn main() -> eframe::Result {
         bench,
     };
     eframe::run_native(
-        "qmarkdown",
+        "MetalMD",
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, startup)))),
     )

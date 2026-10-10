@@ -1,7 +1,7 @@
 """
 Release build: cargo build --release, the Inno Setup installer
-(dist\\qmarkdown_<version>_Setup.exe) and the portable archive
-(dist\\qmarkdown_<version>_portable.zip).
+(dist\\MetalMD_<version>_Setup.exe) and the portable archive
+(dist\\MetalMD_<version>_portable.zip).
 
 Runs from any folder: python tools/make_release.py [--no-tests] [--install]
 --install then installs the build silently over the installed copy, to try it.
@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CARGO_TOML = ROOT / "Cargo.toml"
 ISS_FILE = ROOT / "tools" / "setup.iss"
 DIST_DIR = ROOT / "dist"
-EXE = ROOT / "target" / "release" / "qmarkdown.exe"
+EXE = ROOT / "target" / "release" / "metalmd.exe"
 ICON = ROOT / "target" / "app.ico"
 
 # Files the installer takes from the repository (see [Files] in setup.iss).
@@ -33,9 +33,9 @@ BUNDLED_FILES = ["LICENSE", "THIRD_PARTY_LICENSES.md", "README.md", "README.ru.m
 # THIRD_PARTY_LICENSES.md carries the BSD-3 notice of the code from Markpad.
 PORTABLE_FILES = ["LICENSE", "THIRD_PARTY_LICENSES.md"]
 # Folder inside the portable archive, so that extracting "here" does not drop the exe among other files.
-PORTABLE_DIR = "qmarkdown"
+PORTABLE_DIR = "MetalMD"
 # Must match settings::PORTABLE_FILE in src/settings.rs.
-PORTABLE_SETTINGS = "qmarkdown.json"
+PORTABLE_SETTINGS = "metalmd.json"
 
 # The installer's AppId (setup.iss) and where Inno Setup records the installation.
 APP_ID = "{077D164E-02EF-4145-875C-98CE85AB5507}"
@@ -156,11 +156,11 @@ def close_running_exe(exe: Path) -> None:
     so that it saves its settings, then by force after 3 seconds."""
     if not exe_locked(exe):
         return
-    query = f"(Get-Process qmarkdown -ErrorAction SilentlyContinue | Where-Object Path -eq '{exe}').Id"
+    query = f"(Get-Process metalmd -ErrorAction SilentlyContinue | Where-Object Path -eq '{exe}').Id"
     out = subprocess.run(["powershell", "-NoProfile", "-Command", query], capture_output=True, text=True)
     pids = out.stdout.split()
     for pid in pids:
-        print(f"  closing qmarkdown.exe (PID {pid})")
+        print(f"  closing metalmd.exe (PID {pid})")
         subprocess.run(["taskkill", "/PID", pid], capture_output=True)
     deadline = time.monotonic() + 3
     while exe_locked(exe) and time.monotonic() < deadline:
@@ -170,7 +170,7 @@ def close_running_exe(exe: Path) -> None:
             subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
         time.sleep(0.5)
     if exe_locked(exe):
-        raise ReleaseError(f"{exe} is in use: close qmarkdown and try again")
+        raise ReleaseError(f"{exe} is in use: close MetalMD and try again")
 
 
 def installed_exe() -> Path:
@@ -179,7 +179,7 @@ def installed_exe() -> Path:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as key:
             folder = Path(winreg.QueryValueEx(key, "InstallLocation")[0])
     except OSError:
-        folder = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "qmarkdown"
+        folder = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "MetalMD"
     return folder / EXE.name
 
 
@@ -199,7 +199,7 @@ def make_portable_zip(version: str) -> Path:
 
     The settings file next to the exe (settings::PORTABLE_FILE) makes the copy keep its settings and
     recent files there instead of in %APPDATA%."""
-    archive = DIST_DIR / f"qmarkdown_{version}_portable.zip"
+    archive = DIST_DIR / f"MetalMD_{version}_portable.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         z.write(EXE, f"{PORTABLE_DIR}/{EXE.name}")
         z.writestr(f"{PORTABLE_DIR}/{PORTABLE_SETTINGS}", "")
@@ -209,7 +209,7 @@ def make_portable_zip(version: str) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build a qmarkdown release")
+    parser = argparse.ArgumentParser(description="Build a MetalMD release")
     parser.add_argument("--no-tests", action="store_true", help="do not run cargo test")
     parser.add_argument(
         "--install", action="store_true", help="then install the build silently over the installed copy"
@@ -231,7 +231,7 @@ def main() -> int:
             run_command([cargo, "test"], "cargo test")
 
         steps.next("Release build")
-        # Checked right before the build: qmarkdown may have been started while the tests ran.
+        # Checked right before the build: MetalMD may have been started while the tests ran.
         close_running_exe(EXE)
         run_command([cargo, "build", "--release"], "cargo build")
         if not EXE.is_file():
@@ -254,7 +254,7 @@ def main() -> int:
             ],
             "ISCC",
         )
-        installer = DIST_DIR / f"qmarkdown_{version}_Setup.exe"
+        installer = DIST_DIR / f"MetalMD_{version}_Setup.exe"
         if not installer.is_file():
             raise ReleaseError(f"ISCC finished, but the installer was not found: {installer}")
         # Names without spaces: GitHub replaces spaces in release file names with dots.

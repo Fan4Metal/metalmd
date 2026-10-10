@@ -35,7 +35,7 @@ pub fn show(
                 let start = ui.cursor().min.y;
                 ui.image((icon.id(), egui::vec2(ICON, ICON)));
                 ui.add_space(14.0);
-                ui.label(RichText::new("qmarkdown").size(30.0).strong());
+                ui.label(RichText::new("MetalMD").size(30.0).strong());
                 ui.weak(format!("Version {}", crate::VERSION));
                 ui.add_space(18.0);
                 ui.label("Open a Markdown file with Ctrl+O or drop it here");

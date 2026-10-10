@@ -1,11 +1,11 @@
 [package]
-name = "qmarkdown"
+name = "metalmd"
 version = "0.1.0"
 authors = ["Fan4_Metal"]
 edition = "2024"
 description = "Fast native Markdown viewer"
 license = "MIT"
-repository = "https://github.com/Fan4Metal/qmarkdown"
+repository = "https://github.com/Fan4Metal/metalmd"
 rust-version = "1.95"
 
 [dependencies]
