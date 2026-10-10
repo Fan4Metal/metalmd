@@ -2,9 +2,11 @@
 
 pub mod about;
 pub mod animation;
+pub mod diagram;
 pub mod find;
 pub mod home;
 pub mod math;
+pub mod render_cache;
 pub mod svg;
 pub mod toc;
 pub mod viewer;

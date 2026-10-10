@@ -11,8 +11,10 @@ use crate::markdown::document::{
 use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
 use crate::style::{BODY_SIZE, FontChoice, MAX_CONTENT_WIDTH, Palette};
+use crate::ui::diagram::DiagramRenderer;
 use crate::ui::find::{FindState, Match};
 use crate::ui::math::{Formula, MathRenderer, MathState};
+use crate::ui::render_cache::State;
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
 use egui::{
@@ -113,6 +115,12 @@ impl ViewState {
     }
 }
 
+/// The renderers of the pictures made from document text.
+pub struct Pictures {
+    pub math: MathRenderer,
+    pub diagrams: DiagramRenderer,
+}
+
 /// Everything a frame of rendering needs besides the document.
 pub struct RenderCtx<'a> {
     pub palette: &'a Palette,
@@ -120,15 +128,15 @@ pub struct RenderCtx<'a> {
     /// Changes whenever the font set changes (CJK fallback loaded).
     pub fonts_generation: u64,
     pub highlighter: &'a Highlighter,
-    pub math: &'a MathRenderer,
+    pub pictures: &'a Pictures,
     pub base_dir: Option<&'a Path>,
     pub find: &'a FindState,
     pub actions: Vec<ViewAction>,
     hover: Option<(u32, u32)>,
     new_hover: Option<(u32, u32)>,
-    /// A formula drawn since this was last cleared is still being typeset,
-    /// so the block's height is not final.
-    math_pending: bool,
+    /// A formula or diagram drawn since this was last cleared is still being
+    /// made, so the block's height is not final.
+    pending: bool,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -137,7 +145,7 @@ impl<'a> RenderCtx<'a> {
         fonts: &'a FontChoice,
         fonts_generation: u64,
         highlighter: &'a Highlighter,
-        math: &'a MathRenderer,
+        pictures: &'a Pictures,
         base_dir: Option<&'a Path>,
         find: &'a FindState,
     ) -> Self {
@@ -146,13 +154,13 @@ impl<'a> RenderCtx<'a> {
             fonts,
             fonts_generation,
             highlighter,
-            math,
+            pictures,
             base_dir,
             find,
             actions: Vec::new(),
             hover: None,
             new_hover: None,
-            math_pending: false,
+            pending: false,
         }
     }
 }
@@ -248,10 +256,10 @@ pub fn show_document(
                     pos2(left, origin.y + offsets[cursor]),
                     vec2(content_width, 1.0e5),
                 );
-                rc.math_pending = false;
+                rc.pending = false;
                 view.heights[cursor] = draw_top_block(ui, doc, cursor, rect, rc, true);
-                // Measured again in a later frame, once its formulas are set.
-                view.measured[cursor] = !rc.math_pending;
+                // Measured again in a later frame, once its pictures are made.
+                view.measured[cursor] = !rc.pending;
                 remaining -= 1;
             }
             cursor = (cursor + 1) % count;
@@ -376,7 +384,11 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             lang,
             code,
         } => {
-            draw_code(ui, *id, Some(*key), lang, code, rc, salt);
+            if lang.eq_ignore_ascii_case("mermaid") {
+                draw_diagram(ui, *id, code, rc, salt);
+            } else {
+                draw_code(ui, *id, Some(*key), lang, code, rc, salt);
+            }
         }
         Block::Math { id, tex } => draw_display_math(ui, *id, tex, rc, salt),
         Block::FrontMatter { id, yaml } => {
@@ -1006,10 +1018,10 @@ fn inline_math(
     let tex = &rich.text[span.range.clone()];
     let display = style.has(Style::DISPLAY);
     let ppem = em * ui.ctx().pixels_per_point();
-    let formula = match rc.math.get(ui.ctx(), tex, display, color, ppem) {
+    let formula = match rc.pictures.math.get(ui.ctx(), tex, display, color, ppem) {
         MathState::Ready(formula) => formula,
         MathState::Pending => {
-            rc.math_pending = true;
+            rc.pending = true;
             return None;
         }
         MathState::Failed(_) => return None,
@@ -1018,13 +1030,13 @@ fn inline_math(
     // space has no outline, so no size of it takes room in the font atlas).
     let space_per_point =
         ui.fonts_mut(|f| f.glyph_width(&FontId::proportional(100.0), '\u{a0}')) / 100.0;
-    let font_size = (formula.width * em / space_per_point.max(0.01)).max(0.5);
+    let font_size = (formula.size(em).x / space_per_point.max(0.01)).max(0.5);
     // Text sits on the bottom of its row, its baseline `below` above it (see
     // `text_format`); the row grows to fit the formula above the baseline.
     // Below it the leading is enough for most formulas.
     let line_height = (size * LINE_HEIGHT).round();
     let below = line_height - rc.fonts.body_ascent * size;
-    let needed = (formula.height * em + below + 1.0).ceil();
+    let needed = (formula.ascent(em) + below + 1.0).ceil();
     let format = TextFormat {
         font_id: FontId::proportional(font_size),
         line_height: Some(needed.max(line_height)),
@@ -1059,7 +1071,7 @@ fn paint_inline_maths(
         let baseline = at.max.y - below;
         if let Some(current) = math.found {
             let rect = Rect::from_min_size(
-                pos2(left, baseline - math.formula.height * math.em),
+                pos2(left, baseline - math.formula.ascent(math.em)),
                 math.formula.size(math.em),
             )
             .expand(1.0);
@@ -1170,12 +1182,12 @@ fn draw_display_math(ui: &mut Ui, id: u32, tex: &str, rc: &mut RenderCtx<'_>, sa
     let em = BODY_SIZE * MATH_SCALE;
     let color = ui.visuals().text_color();
     let ppem = em * ui.ctx().pixels_per_point();
-    let formula = match rc.math.get(ui.ctx(), tex, true, color, ppem) {
+    let formula = match rc.pictures.math.get(ui.ctx(), tex, true, color, ppem) {
         MathState::Ready(formula) => formula,
         MathState::Pending => {
             // About the height of a one-line formula, so little moves once
             // it is set.
-            rc.math_pending = true;
+            rc.pending = true;
             ui.allocate_exact_size(vec2(ui.available_width(), em * 1.6), Sense::hover());
             return;
         }
@@ -1197,7 +1209,7 @@ fn draw_display_math(ui: &mut Ui, id: u32, tex: &str, rc: &mut RenderCtx<'_>, sa
     let draw = |ui: &mut Ui| {
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         if ui.is_rect_visible(rect) {
-            let baseline = rect.top() + margin + formula.height * em;
+            let baseline = rect.top() + margin + formula.ascent(em);
             if let Some(current) = found {
                 let fill = if current {
                     rc.palette.search_current_bg
@@ -1224,6 +1236,86 @@ fn draw_display_math(ui: &mut Ui, id: u32, tex: &str, rc: &mut RenderCtx<'_>, sa
             .auto_shrink([false, true])
             .show(ui, draw);
     }
+}
+
+/// A ```` ```mermaid ```` block: the diagram centred at its own size, or
+/// scaled down to the page's width. A source that cannot be drawn is shown as
+/// code with the error.
+fn draw_diagram(ui: &mut Ui, id: u32, source: &str, rc: &mut RenderCtx<'_>, salt: u64) {
+    let dark = rc.palette.dark;
+    let ppp = ui.ctx().pixels_per_point();
+    let available = ui.available_width();
+    let fit = |natural: Vec2| (available / natural.x).min(1.0);
+    // Made at the size it is shown at, once that is known.
+    let scale = rc
+        .pictures
+        .diagrams
+        .peek(source, dark)
+        .map_or(ppp, |d| fit(d.meta) * ppp);
+    let diagram = match rc.pictures.diagrams.get(ui.ctx(), source, dark, scale) {
+        State::Ready(diagram) => diagram,
+        State::Pending => {
+            rc.pending = true;
+            ui.allocate_exact_size(vec2(available, 160.0), Sense::hover());
+            return;
+        }
+        State::Failed(error) => {
+            draw_code(ui, id, None, "mermaid", source, rc, salt);
+            ui.label(
+                RichText::new(error.as_ref())
+                    .size(12.0)
+                    .color(rc.palette.alert(AlertKind::Caution)),
+            );
+            return;
+        }
+    };
+    let size = diagram.meta * fit(diagram.meta);
+    let (matches, current) = rc.find.matches_in(id);
+    let found = (!matches.is_empty()).then(|| current.is_some());
+    ui.vertical_centered(|ui| {
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        if ui.is_rect_visible(rect) {
+            if let Some(current) = found {
+                let color = if current {
+                    rc.palette.search_current_bg
+                } else {
+                    rc.palette.search_bg
+                };
+                ui.painter().rect_stroke(
+                    rect.expand(4.0),
+                    4.0,
+                    Stroke::new(2.0, color),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            // On whole pixels, so that at the scale it was made for each
+            // texel is one pixel.
+            let corner = pos2(
+                (rect.min.x * ppp).round() / ppp,
+                (rect.min.y * ppp).round() / ppp,
+            );
+            let [w, h] = diagram.texture.size();
+            let shown = Rect::from_min_size(
+                corner,
+                vec2(w as f32, h as f32) * (size.x / diagram.meta.x / diagram.scale),
+            );
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            ui.painter()
+                .image(diagram.texture.id(), shown, uv, Color32::WHITE);
+        }
+        response.context_menu(|ui| {
+            if ui
+                .button(tr!(
+                    "Copy Mermaid source",
+                    "Копировать исходный код Mermaid"
+                ))
+                .clicked()
+            {
+                ui.ctx().copy_text(source.to_owned());
+                ui.close();
+            }
+        });
+    });
 }
 
 /// `file://` URI or http(s) URL for an image source written in a document.
@@ -1509,6 +1601,7 @@ fn estimate(block: &Block, width: f32) -> f32 {
                 + gap
         }
         Block::Paragraph { inlines, .. } => inline_height(inlines, BODY_SIZE) + gap,
+        Block::Code { lang, .. } if lang.eq_ignore_ascii_case("mermaid") => 300.0 + gap,
         Block::Code { code, .. } | Block::Math { tex: code, .. } => {
             (code.lines().count().max(1) as f32) * (BODY_SIZE * CODE_SCALE * 1.45).round()
                 + 24.0

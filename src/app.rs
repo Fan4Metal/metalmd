@@ -9,10 +9,12 @@ use crate::settings::{Settings, ThemeSetting, same_path};
 use crate::single_instance::Server;
 use crate::style::{self, BODY_SIZE, FontChoice, Palette};
 use crate::ui::about::About;
+use crate::ui::diagram::DiagramRenderer;
 use crate::ui::find::FindState;
 use crate::ui::home::{self, HomeAction};
 use crate::ui::math::MathRenderer;
 use crate::ui::toc;
+use crate::ui::viewer::Pictures;
 use crate::ui::viewer::{self, RenderCtx, ViewAction, ViewState};
 use crate::watcher::FileWatcher;
 use egui::{
@@ -176,7 +178,7 @@ pub struct App {
     settings: Settings,
     settings_dirty: bool,
     highlighter: Highlighter,
-    math: MathRenderer,
+    pictures: Pictures,
     base_fonts: FontDefinitions,
     fonts: FontChoice,
     fonts_generation: u64,
@@ -246,9 +248,13 @@ impl App {
             let cell = startup.ctx_cell.clone();
             Highlighter::new(move || request_repaint(&cell))
         };
-        let math = {
-            let cell = startup.ctx_cell.clone();
-            MathRenderer::new(move || request_repaint(&cell))
+        let pictures = {
+            let math_cell = startup.ctx_cell.clone();
+            let diagram_cell = startup.ctx_cell.clone();
+            Pictures {
+                math: MathRenderer::new(move || request_repaint(&math_cell)),
+                diagrams: DiagramRenderer::new(move || request_repaint(&diagram_cell)),
+            }
         };
 
         let next_id = startup
@@ -274,7 +280,7 @@ impl App {
             settings: startup.settings,
             settings_dirty: false,
             highlighter,
-            math,
+            pictures,
             base_fonts,
             fonts,
             fonts_generation: 0,
@@ -1046,7 +1052,7 @@ impl eframe::App for App {
                             &self.fonts,
                             self.fonts_generation,
                             &self.highlighter,
-                            &self.math,
+                            &self.pictures,
                             base_dir.as_deref(),
                             &self.find,
                         );

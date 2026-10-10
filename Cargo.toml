@@ -18,6 +18,7 @@ ratex-parser = "0.1.14"
 ratex-layout = "0.1.14"
 ratex-types = "0.1.14"
 ratex-svg = { version = "0.1.14", features = ["embed-fonts"] }
+mermaid-svg = "0.7.0"
 comrak = { version = "0.56.0", default-features = false }
 regex = "1"
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "dump-load", "regex-fancy"] }

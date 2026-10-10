@@ -52,7 +52,7 @@ const FONT_FILES: &[&str] = &[
     "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
 ];
 
-fn text_options() -> &'static Options<'static> {
+pub fn text_options() -> &'static Options<'static> {
     static OPTIONS: OnceLock<Options<'static>> = OnceLock::new();
     OPTIONS.get_or_init(|| {
         let mut options = Options::default();

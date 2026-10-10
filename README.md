@@ -27,6 +27,7 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 - **Obsidian and Markpad syntax**: `[[Note#Heading|alias]]` wikilinks, `![[image.png|300x200]]` embeds, `^block-id` anchors, `==highlight==`, `++insert++`, `^[inline footnotes]` and definition lists. A single newline is a line break (see [Supported Markdown](#supported-markdown)).
 - **Code highlighting** for about 200 languages, in colours that follow the light or dark theme.
 - **Formulas**: `$…$` and `$$…$$` are typeset as KaTeX does it, by [RaTeX](https://github.com/erweixin/RaTeX), a port of KaTeX to Rust.
+- **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
 - **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` and other tags common in READMEs.
 - **Table of contents**: it highlights the current section, and a click jumps to a heading.
 - **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window.
@@ -47,11 +48,12 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 | Obsidian | `[[Note#Heading\|alias]]` wikilinks, `![[image.png\|300x200]]` embeds, `^block-id` anchors |
 | Other extensions | `==highlight==`, `++insert++`, `^[inline footnote]`, definition lists, YAML front matter |
 | Math | `$E = mc^2$` inline, `$$ … $$` on its own lines, LaTeX as [KaTeX](https://katex.org/docs/supported) supports it |
+| Diagrams | ```` ```mermaid ```` blocks: the diagram types of [mermaid-svg](https://github.com/xmiksay/mermaid) |
 | Code blocks | highlighted with [syntect](https://github.com/trishume/syntect) and the grammars of [two-face](https://github.com/CosmicHorrorDev/two-face) |
 | Images | PNG, JPEG, GIF, WebP, SVG and BMP, local or over http(s) |
 | HTML | `<img>`, `<a>`, `<br>`, `<p align="center">`, `<b>`, `<i>`, `<kbd>`, `<sub>`, `<sup>`, `<mark>`, `<details>` |
 
-The following is **not** supported. Mermaid diagrams are shown as code, and video, audio and YouTube previews are not shown. Markpad's extra alert types (`[!TODO]` and others), foldable alerts, `data:` images and HTML beyond the tags above are not supported either.
+The following is **not** supported. Video, audio and YouTube previews are not shown. Markpad's extra alert types (`[!TODO]` and others), foldable alerts, `data:` images and HTML beyond the tags above are not supported either.
 
 ## Installation
 

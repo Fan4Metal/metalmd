@@ -2,47 +2,38 @@
 //!
 //! The worker lays a formula out, writes it as SVG with the glyph outlines
 //! of the embedded KaTeX fonts, and rasterises it with resvg at the pixel
-//! size it is shown at. The size of a formula in ems does not depend on that
-//! pixel size, so after a zoom the old texture is drawn scaled until the new
-//! one arrives. Until the first one arrives the viewer shows the TeX as code.
+//! size it is shown at (see [`super::render_cache`]). The size of a formula
+//! in ems does not depend on that pixel size.
 
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
-
-use egui::{Color32, ColorImage, Context, TextureHandle, TextureOptions};
+use super::render_cache::{Picture, RenderCache, Rendered, State};
+use egui::{Color32, Context, TextureOptions};
+use std::sync::Arc;
 
 /// Space around the formula in the image, in pixels, so that antialiased
 /// edges are not cut off.
 const PAD_PX: f32 = 2.0;
 
-/// Images larger than this many pixels on a side are not made; the formula
-/// is shown as code.
-const MAX_SIDE_PX: f32 = 8192.0;
-
-/// A formula ready to draw.
-pub struct Formula {
-    /// Width, height above the baseline and depth below it, in ems.
+/// Width, height above the baseline and depth below it, in ems.
+pub struct Metrics {
     pub width: f32,
     pub height: f32,
     pub depth: f32,
-    /// Covers the formula plus [`PAD_PX`] on each side at `ppem` pixels per
-    /// em.
-    pub texture: TextureHandle,
-    pub ppem: f32,
 }
 
-impl Formula {
+/// A formula ready to draw: its texture covers it plus [`PAD_PX`] on each
+/// side at `scale` pixels per em.
+pub type Formula = Picture<Metrics>;
+
+impl Picture<Metrics> {
     /// Draws the formula at `em` points per em, its left end at `left` and
     /// its baseline at `baseline`. The texture's corner goes on a pixel, so
     /// that at the size it was made for each texel is one pixel.
     pub fn paint(&self, painter: &egui::Painter, left: f32, baseline: f32, em: f32) {
         let ppp = painter.pixels_per_point();
-        let scale = em / self.ppem;
+        let scale = em / self.scale;
         let corner = egui::pos2(
             left - PAD_PX * scale,
-            baseline - self.height * em - PAD_PX * scale,
+            baseline - self.meta.height * em - PAD_PX * scale,
         );
         let corner = egui::pos2(
             (corner.x * ppp).round() / ppp,
@@ -57,7 +48,15 @@ impl Formula {
 
     /// The formula's box at `em` points per em, without the padding.
     pub fn size(&self, em: f32) -> egui::Vec2 {
-        egui::vec2(self.width * em, (self.height + self.depth) * em)
+        egui::vec2(
+            self.meta.width * em,
+            (self.meta.height + self.meta.depth) * em,
+        )
+    }
+
+    /// Height above the baseline at `em` points per em.
+    pub fn ascent(&self, em: f32) -> f32 {
+        self.meta.height * em
     }
 }
 
@@ -67,88 +66,16 @@ pub enum MathState {
     Failed(Arc<str>),
 }
 
-/// What a formula looks like: its TeX, display or inline style, and color.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct Key {
-    tex: u64,
-    display: bool,
-    color: [u8; 4],
-}
-
-impl Key {
-    fn new(tex: &str, display: bool, color: Color32) -> Key {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        tex.hash(&mut hasher);
-        Key {
-            tex: hasher.finish(),
-            display,
-            color: color.to_array(),
-        }
-    }
-}
-
-struct Job {
-    key: Key,
-    tex: String,
-    ppem: f32,
-}
-
-struct Rendered {
-    image: ColorImage,
-    width: f32,
-    height: f32,
-    depth: f32,
-}
-
-#[derive(Default)]
-struct Entry {
-    formula: Option<Arc<Formula>>,
-    /// The image made for `pending_ppem`, not yet a texture.
-    image: Option<(Rendered, f32)>,
-    /// A rendering at this size is queued or done.
-    pending_ppem: Option<f32>,
-    error: Option<Arc<str>>,
-}
-
-type RepaintFn = Arc<dyn Fn() + Send + Sync>;
-
-struct Inner {
-    cache: Mutex<HashMap<Key, Entry>>,
-    sender: Mutex<Option<Sender<Job>>>,
-    repaint: RepaintFn,
-}
-
 #[derive(Clone)]
 pub struct MathRenderer {
-    inner: Arc<Inner>,
+    cache: RenderCache<Metrics>,
 }
 
 impl MathRenderer {
     pub fn new(repaint: impl Fn() + Send + Sync + 'static) -> MathRenderer {
         MathRenderer {
-            inner: Arc::new(Inner {
-                cache: Mutex::new(HashMap::new()),
-                sender: Mutex::new(None),
-                repaint: Arc::new(repaint),
-            }),
+            cache: RenderCache::new("math", render, TextureOptions::LINEAR, repaint),
         }
-    }
-
-    fn sender(&self) -> Sender<Job> {
-        let mut guard = self.inner.sender.lock().expect("math lock");
-        if let Some(sender) = guard.as_ref() {
-            return sender.clone();
-        }
-        let (sender, receiver) = channel::<Job>();
-        let inner = Arc::clone(&self.inner);
-        std::thread::Builder::new()
-            .name("math".into())
-            // Deeply nested TeX recurses deeply.
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || worker(receiver, inner))
-            .expect("spawn math thread");
-        *guard = Some(sender.clone());
-        sender
     }
 
     /// The formula for `tex` in `color`, its texture made for `ppem` pixels
@@ -161,66 +88,29 @@ impl MathRenderer {
         color: Color32,
         ppem: f32,
     ) -> MathState {
-        let key = Key::new(tex, display, color);
-        let ppem = (ppem * 4.0).round() / 4.0;
-        let mut cache = self.inner.cache.lock().expect("math lock");
-        let entry = cache.entry(key).or_default();
-        if let Some((rendered, at)) = entry.image.take() {
-            let texture = ctx.load_texture("math", rendered.image, TextureOptions::LINEAR);
-            entry.formula = Some(Arc::new(Formula {
-                width: rendered.width,
-                height: rendered.height,
-                depth: rendered.depth,
-                texture,
-                ppem: at,
-            }));
-        }
-        if let Some(error) = &entry.error {
-            return MathState::Failed(Arc::clone(error));
-        }
-        if entry.pending_ppem != Some(ppem) {
-            entry.pending_ppem = Some(ppem);
-            drop(cache);
-            let _ = self.sender().send(Job {
-                key,
-                tex: tex.to_owned(),
-                ppem,
-            });
-            cache = self.inner.cache.lock().expect("math lock");
-        }
-        match cache.get(&key).and_then(|e| e.formula.clone()) {
-            Some(formula) => MathState::Ready(formula),
-            None => MathState::Pending,
+        let variant = (u32::from_be_bytes(color.to_array()) as u64) << 1 | display as u64;
+        match self.cache.get(ctx, tex, variant, ppem) {
+            State::Ready(formula) => MathState::Ready(formula),
+            State::Pending => MathState::Pending,
+            State::Failed(error) => MathState::Failed(error),
         }
     }
 }
 
-fn worker(receiver: Receiver<Job>, inner: Arc<Inner>) {
-    while let Ok(job) = receiver.recv() {
-        // A later request for another size makes this one moot.
-        let wanted = inner
-            .cache
-            .lock()
-            .expect("math lock")
-            .get(&job.key)
-            .and_then(|e| e.pending_ppem);
-        if wanted != Some(job.ppem) {
-            continue;
-        }
-        let result = render(&job.tex, job.key.display, job.key.color, job.ppem);
-        let mut cache = inner.cache.lock().expect("math lock");
-        let entry = cache.entry(job.key).or_default();
-        match result {
-            Ok(rendered) => entry.image = Some((rendered, job.ppem)),
-            Err(error) => entry.error = Some(error.into()),
-        }
-        drop(cache);
-        (inner.repaint)();
-    }
+/// Lays `tex` out and rasterises it at `ppem` pixels per em; `variant` is
+/// the display flag and the color, as [`MathRenderer::get`] packs them.
+fn render(tex: &str, variant: u64, ppem: f32) -> Result<Rendered<Metrics>, String> {
+    let display = variant & 1 == 1;
+    let color = ((variant >> 1) as u32).to_be_bytes();
+    render_tex(tex, display, color, ppem)
 }
 
-/// Lays `tex` out and rasterises it at `ppem` pixels per em.
-fn render(tex: &str, display: bool, color: [u8; 4], ppem: f32) -> Result<Rendered, String> {
+fn render_tex(
+    tex: &str,
+    display: bool,
+    color: [u8; 4],
+    ppem: f32,
+) -> Result<Rendered<Metrics>, String> {
     use ratex_layout::LayoutOptions;
     use ratex_types::math_style::MathStyle;
 
@@ -240,7 +130,11 @@ fn render(tex: &str, display: bool, color: [u8; 4], ppem: f32) -> Result<Rendere
         ..LayoutOptions::default()
     };
     let list = ratex_layout::to_display_list(&ratex_layout::layout(&nodes, &options));
-    let (width, height, depth) = (list.width as f32, list.height as f32, list.depth as f32);
+    let metrics = Metrics {
+        width: list.width as f32,
+        height: list.height as f32,
+        depth: list.depth as f32,
+    };
     let svg_options = ratex_svg::SvgOptions {
         font_size: ppem as f64,
         padding: PAD_PX as f64,
@@ -248,27 +142,18 @@ fn render(tex: &str, display: bool, color: [u8; 4], ppem: f32) -> Result<Rendere
         ..Default::default()
     };
     let svg = ratex_svg::render_to_svg(&list, &svg_options);
-    let w = (width * ppem + 2.0 * PAD_PX).ceil();
-    let h = ((height + depth) * ppem + 2.0 * PAD_PX).ceil();
-    if !(1.0..=MAX_SIDE_PX).contains(&w) || !(1.0..=MAX_SIDE_PX).contains(&h) {
-        return Err(format!("formula too large ({w}x{h} px)"));
-    }
     let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default())
         .map_err(|e| e.to_string())?;
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(w as u32, h as u32).ok_or("bad formula size")?;
     // The SVG gives its size in `pt`, which usvg turns into 4/3 as many
     // pixels; its view box is in the pixels wanted.
-    let scale = (width * ppem + 2.0 * PAD_PX) / tree.size().width();
-    resvg::render(
-        &tree,
-        resvg::tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
+    let width = metrics.width * ppem + 2.0 * PAD_PX;
+    let height = (metrics.height + metrics.depth) * ppem + 2.0 * PAD_PX;
+    let scale = width / tree.size().width();
+    let image =
+        super::render_cache::rasterize(&tree, scale, [width.ceil() as u32, height.ceil() as u32])?;
     Ok(Rendered {
-        image: ColorImage::from_rgba_premultiplied([w as usize, h as usize], pixmap.data()),
-        width,
-        height,
-        depth,
+        image,
+        meta: metrics,
     })
 }
 
@@ -278,21 +163,27 @@ mod tests {
 
     #[test]
     fn formulas_get_a_size_and_pixels() {
-        let rendered = render(r"\frac{a}{b} + x^2", false, [0, 0, 0, 255], 20.0).unwrap();
-        assert!(rendered.width > 1.0 && rendered.height > 0.5 && rendered.depth > 0.1);
+        let rendered = render_tex(r"\frac{a}{b} + x^2", false, [0, 0, 0, 255], 20.0).unwrap();
+        let m = &rendered.meta;
+        assert!(m.width > 1.0 && m.height > 0.5 && m.depth > 0.1);
         let [w, h] = rendered.image.size;
-        assert_eq!(w, (rendered.width * 20.0 + 4.0).ceil() as usize);
-        assert_eq!(
-            h,
-            ((rendered.height + rendered.depth) * 20.0 + 4.0).ceil() as usize
-        );
+        assert_eq!(w, (m.width * 20.0 + 4.0).ceil() as usize);
+        assert_eq!(h, ((m.height + m.depth) * 20.0 + 4.0).ceil() as usize);
         assert!(rendered.image.pixels.iter().any(|p| p.a() > 200));
     }
 
     #[test]
+    fn the_variant_carries_display_and_color() {
+        let color = Color32::from_rgb(1, 2, 3);
+        let variant = (u32::from_be_bytes(color.to_array()) as u64) << 1 | 1;
+        assert_eq!(variant & 1, 1);
+        assert_eq!(((variant >> 1) as u32).to_be_bytes(), [1, 2, 3, 255]);
+    }
+
+    #[test]
     fn bad_tex_is_an_error() {
-        assert!(render(r"\frac{a}{", false, [0, 0, 0, 255], 20.0).is_err());
-        assert!(render(r"\nosuchcommand", true, [0, 0, 0, 255], 20.0).is_err());
-        assert!(render("  ", true, [0, 0, 0, 255], 20.0).is_err());
+        assert!(render_tex(r"\frac{a}{", false, [0, 0, 0, 255], 20.0).is_err());
+        assert!(render_tex(r"\nosuchcommand", true, [0, 0, 0, 255], 20.0).is_err());
+        assert!(render_tex("  ", true, [0, 0, 0, 255], 20.0).is_err());
     }
 }
