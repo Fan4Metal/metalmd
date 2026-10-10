@@ -1022,6 +1022,10 @@ impl eframe::App for App {
         }
         match home_action {
             Some(HomeAction::Open(path)) => self.open_paths(&ctx, vec![path], false),
+            Some(HomeAction::ClearRecent) => {
+                self.settings.recent.clear();
+                self.settings_dirty = true;
+            }
             None => {}
         }
 

@@ -9,6 +9,7 @@ const ICON: f32 = 112.0;
 
 pub enum HomeAction {
     Open(PathBuf),
+    ClearRecent,
 }
 
 pub fn show(
@@ -49,6 +50,10 @@ pub fn show(
                             action = Some(HomeAction::Open(clicked));
                         }
                     }
+                    ui.add_space(10.0);
+                    if clear_recent(ui, palette) {
+                        action = Some(HomeAction::ClearRecent);
+                    }
                     ui.add_space(16.0);
                 }
                 let height = ui.cursor().min.y - start;
@@ -59,6 +64,25 @@ pub fn show(
             });
         });
     action
+}
+
+/// "Clear recent" below the list: muted, the link colour under the pointer.
+/// True when clicked.
+fn clear_recent(ui: &mut Ui, palette: &Palette) -> bool {
+    // The label's hover in the previous pass picks the colour before it is
+    // laid out, as egui's Button does it.
+    let id = ui.next_auto_id();
+    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+    let color = if hovered { palette.link } else { palette.muted };
+    let response = ui
+        .add(
+            Label::new(RichText::new("Clear recent").size(12.0).color(color)).sense(Sense::click()),
+        )
+        .on_hover_text("Forget the recent files");
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response.clicked()
 }
 
 /// One recent file: its name as a link, its folder below. The path when
