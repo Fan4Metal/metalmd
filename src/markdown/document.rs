@@ -30,6 +30,8 @@ impl Style {
     pub const SUB: Style = Style(1 << 10);
     /// With `MATH`: `$$ … $$` inside a paragraph, typeset in display style.
     pub const DISPLAY: Style = Style(1 << 11);
+    /// One emoji shown in colour (see [`super::emoji`]), a span of its own.
+    pub const EMOJI: Style = Style(1 << 12);
 
     pub fn has(self, other: Style) -> bool {
         self.0 & other.0 == other.0
@@ -724,6 +726,24 @@ impl InlineCtx {
         } else {
             style
         };
+        if style.has(Style::CODE) || style.has(Style::MATH) {
+            self.append(&text, style, merge);
+            return;
+        }
+        let mut rest = &*text;
+        while let Some(emoji) = super::emoji::find(rest) {
+            self.append(&rest[..emoji.start], style, merge);
+            self.append(&rest[emoji.clone()], style | Style::EMOJI, false);
+            rest = &rest[emoji.end..];
+        }
+        self.append(rest, style, merge);
+    }
+
+    /// Appends `text` with its final style and the current link.
+    fn append(&mut self, text: &str, style: Style, merge: bool) {
+        if text.is_empty() {
+            return;
+        }
         let link = self.link.as_ref().map(|target| {
             match self.cur.links.iter().rposition(|l| l == target) {
                 Some(index) if index + 1 == self.cur.links.len() => index as u32,
@@ -734,7 +754,7 @@ impl InlineCtx {
             }
         });
         let start = self.cur.text.len();
-        self.cur.text.push_str(&text);
+        self.cur.text.push_str(text);
         let end = self.cur.text.len();
         if let Some(last) = self.cur.spans.last_mut()
             && merge
@@ -1399,6 +1419,29 @@ mod tests {
             .map(|s| (&rich.text[s.range.clone()], s.style.has(Style::DISPLAY)))
             .collect();
         assert_eq!(maths, vec![("a", false), ("b", false), ("c", true)]);
+    }
+
+    #[test]
+    fn each_emoji_is_a_span_of_its_own_outside_code() {
+        let doc = Document::parse("**ok ✅✅** [go 🚀](x) `❌` 👩‍💻\n");
+        let rich = first_rich(&doc.blocks[0]);
+        let emoji: Vec<(&str, Style)> = rich
+            .spans
+            .iter()
+            .filter(|s| s.style.has(Style::EMOJI))
+            .map(|s| (&rich.text[s.range.clone()], s.style))
+            .collect();
+        assert_eq!(
+            emoji,
+            vec![
+                ("✅", Style::STRONG | Style::EMOJI),
+                ("✅", Style::STRONG | Style::EMOJI),
+                ("🚀", Style::LINK | Style::EMOJI),
+                ("👩‍💻", Style::EMOJI),
+            ]
+        );
+        let rocket = rich.text.find('🚀').unwrap();
+        assert_eq!(rich.link_at(rocket), Some(0));
     }
 
     #[test]

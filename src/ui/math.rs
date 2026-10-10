@@ -5,66 +5,8 @@
 //! size it is shown at (see [`super::render_cache`]). The size of a formula
 //! in ems does not depend on that pixel size.
 
-use super::render_cache::{Picture, RenderCache, Rendered, State};
+use super::render_cache::{Metrics, PAD_PX, RenderCache, Rendered, State};
 use egui::{Color32, Context, TextureOptions};
-use std::sync::Arc;
-
-/// Space around the formula in the image, in pixels, so that antialiased
-/// edges are not cut off.
-const PAD_PX: f32 = 2.0;
-
-/// Width, height above the baseline and depth below it, in ems.
-pub struct Metrics {
-    pub width: f32,
-    pub height: f32,
-    pub depth: f32,
-}
-
-/// A formula ready to draw: its texture covers it plus [`PAD_PX`] on each
-/// side at `scale` pixels per em.
-pub type Formula = Picture<Metrics>;
-
-impl Picture<Metrics> {
-    /// Draws the formula at `em` points per em, its left end at `left` and
-    /// its baseline at `baseline`. The texture's corner goes on a pixel, so
-    /// that at the size it was made for each texel is one pixel.
-    pub fn paint(&self, painter: &egui::Painter, left: f32, baseline: f32, em: f32) {
-        let ppp = painter.pixels_per_point();
-        let scale = em / self.scale;
-        let corner = egui::pos2(
-            left - PAD_PX * scale,
-            baseline - self.meta.height * em - PAD_PX * scale,
-        );
-        let corner = egui::pos2(
-            (corner.x * ppp).round() / ppp,
-            (corner.y * ppp).round() / ppp,
-        );
-        let [w, h] = self.texture.size();
-        let rect =
-            egui::Rect::from_min_size(corner, egui::vec2(w as f32 * scale, h as f32 * scale));
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        painter.image(self.texture.id(), rect, uv, Color32::WHITE);
-    }
-
-    /// The formula's box at `em` points per em, without the padding.
-    pub fn size(&self, em: f32) -> egui::Vec2 {
-        egui::vec2(
-            self.meta.width * em,
-            (self.meta.height + self.meta.depth) * em,
-        )
-    }
-
-    /// Height above the baseline at `em` points per em.
-    pub fn ascent(&self, em: f32) -> f32 {
-        self.meta.height * em
-    }
-}
-
-pub enum MathState {
-    Ready(Arc<Formula>),
-    Pending,
-    Failed(Arc<str>),
-}
 
 #[derive(Clone)]
 pub struct MathRenderer {
@@ -87,13 +29,9 @@ impl MathRenderer {
         display: bool,
         color: Color32,
         ppem: f32,
-    ) -> MathState {
+    ) -> State<Metrics> {
         let variant = (u32::from_be_bytes(color.to_array()) as u64) << 1 | display as u64;
-        match self.cache.get(ctx, tex, variant, ppem) {
-            State::Ready(formula) => MathState::Ready(formula),
-            State::Pending => MathState::Pending,
-            State::Failed(error) => MathState::Failed(error),
-        }
+        self.cache.get(ctx, tex, variant, ppem)
     }
 }
 
@@ -149,8 +87,11 @@ fn render_tex(
     let width = metrics.width * ppem + 2.0 * PAD_PX;
     let height = (metrics.height + metrics.depth) * ppem + 2.0 * PAD_PX;
     let scale = width / tree.size().width();
-    let image =
-        super::render_cache::rasterize(&tree, scale, [width.ceil() as u32, height.ceil() as u32])?;
+    let image = super::render_cache::rasterize(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        [width.ceil() as u32, height.ceil() as u32],
+    )?;
     Ok(Rendered {
         image,
         meta: metrics,

@@ -1700,6 +1700,7 @@ dependencies = [
  "serde_json",
  "syntect",
  "two-face",
+ "unicode-properties",
  "windows-sys 0.61.2",
  "winresource",
 ]

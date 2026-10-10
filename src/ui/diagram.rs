@@ -54,7 +54,8 @@ fn render(source: &str, dark: u64, scale: f32) -> Result<Rendered<Vec2>, String>
         (size.x * scale).ceil() as u32,
         (size.y * scale).ceil() as u32,
     ];
-    let image = super::render_cache::rasterize(&tree, scale, pixels)?;
+    let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
+    let image = super::render_cache::rasterize(&tree, transform, pixels)?;
     Ok(Rendered { image, meta: size })
 }
 

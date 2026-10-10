@@ -12,9 +12,10 @@ use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
 use crate::style::{BODY_SIZE, FontChoice, MAX_CONTENT_WIDTH, Palette};
 use crate::ui::diagram::DiagramRenderer;
+use crate::ui::emoji::EmojiRenderer;
 use crate::ui::find::{FindState, Match};
-use crate::ui::math::{Formula, MathRenderer, MathState};
-use crate::ui::render_cache::State;
+use crate::ui::math::MathRenderer;
+use crate::ui::render_cache::{Metrics, Picture, State};
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
 use egui::{
@@ -118,6 +119,7 @@ impl ViewState {
 /// The renderers of the pictures made from document text.
 pub struct Pictures {
     pub math: MathRenderer,
+    pub emoji: EmojiRenderer,
     pub diagrams: DiagramRenderer,
 }
 
@@ -916,47 +918,50 @@ fn append_with_matches(
     }
 }
 
-/// An inline formula in a [`LayoutJob`]: a no-break space as wide as the
-/// formula, which the formula is painted over.
-struct InlineMath {
+/// A formula or emoji in a [`LayoutJob`]: a no-break space as wide as the
+/// picture, which the picture is painted over.
+struct InlinePicture {
     /// The index of the space among the job's characters.
     char_index: usize,
-    formula: Arc<Formula>,
+    picture: Arc<Picture<Metrics>>,
     /// Points per em.
     em: f32,
-    /// A search match falls in the formula; `true` for the current one.
+    /// A search match falls in the picture; `true` for the current one.
     found: Option<bool>,
 }
 
-/// The text of a `Rich` as a layout job, its typeset formulas left as
-/// spaces for [`paint_inline_maths`].
+/// The text of a `Rich` as a layout job, its typeset formulas and drawn
+/// emoji left as spaces for [`paint_inline_pictures`].
 struct RichJob {
     job: LayoutJob,
-    maths: Vec<InlineMath>,
+    pictures: Vec<InlinePicture>,
     /// Byte offset in `Rich::text` of each character of the job, when they
-    /// differ: a formula is one character in the job.
+    /// differ: a picture is one character in the job.
     char_bytes: Option<Vec<usize>>,
 }
 
 fn rich_job(rich: &Rich, rc: &mut RenderCtx<'_>, ui: &Ui, size: f32, extra: Style) -> RichJob {
     let (matches, current) = rc.find.matches_in(rich.id);
     let line_height = (size * LINE_HEIGHT).round();
-    let has_math = rich.spans.iter().any(|s| s.style.has(Style::MATH));
+    let has_pictures = rich
+        .spans
+        .iter()
+        .any(|s| s.style.has(Style::MATH) || s.style.has(Style::EMOJI));
     let mut char_bytes = Vec::new();
     let mut job = LayoutJob::default();
-    let mut maths = Vec::new();
+    let mut pictures = Vec::new();
     for span in &rich.spans {
         let style = span.style | extra;
-        if style.has(Style::MATH)
-            && let Some((format, formula, em)) = inline_math(rich, span, style, rc, ui, size)
+        if (style.has(Style::MATH) || style.has(Style::EMOJI))
+            && let Some((format, picture, em)) = inline_picture(rich, span, style, rc, ui, size)
         {
             let found = matches
                 .iter()
                 .position(|m| m.range.start < span.range.end && span.range.start < m.range.end)
                 .map(|k| Some(k) == current);
-            maths.push(InlineMath {
+            pictures.push(InlinePicture {
                 char_index: char_bytes.len(),
-                formula,
+                picture,
                 em,
                 found,
             });
@@ -980,7 +985,7 @@ fn rich_job(rich: &Rich, rc: &mut RenderCtx<'_>, ui: &Ui, size: f32, extra: Styl
             current,
             rc.palette,
         );
-        if has_math {
+        if has_pictures {
             char_bytes.extend(
                 rich.text[span.range.clone()]
                     .char_indices()
@@ -993,50 +998,62 @@ fn rich_job(rich: &Rich, rc: &mut RenderCtx<'_>, ui: &Ui, size: f32, extra: Styl
     job.first_row_min_height = line_height;
     RichJob {
         job,
-        char_bytes: (!maths.is_empty()).then_some(char_bytes),
-        maths,
+        char_bytes: (!pictures.is_empty()).then_some(char_bytes),
+        pictures,
     }
 }
 
-/// The format of the space that stands for an inline formula, the formula
-/// and its points per em; `None` (the TeX is shown as code) until it is
-/// typeset or if it cannot be.
-fn inline_math(
+/// The format of the space that stands for an inline formula or emoji, its
+/// picture and its points per em; `None` (TeX is shown as code, an emoji
+/// as text) until the picture is made or if it cannot be.
+fn inline_picture(
     rich: &Rich,
     span: &Span,
     style: Style,
     rc: &mut RenderCtx<'_>,
     ui: &Ui,
     size: f32,
-) -> Option<(TextFormat, Arc<Formula>, f32)> {
-    let em = size * MATH_SCALE;
+) -> Option<(TextFormat, Arc<Picture<Metrics>>, f32)> {
     let color = if style.has(Style::LINK) {
         rc.palette.link
     } else {
         ui.visuals().text_color()
     };
-    let tex = &rich.text[span.range.clone()];
-    let display = style.has(Style::DISPLAY);
-    let ppem = em * ui.ctx().pixels_per_point();
-    let formula = match rc.pictures.math.get(ui.ctx(), tex, display, color, ppem) {
-        MathState::Ready(formula) => formula,
-        MathState::Pending => {
+    let source = &rich.text[span.range.clone()];
+    let ctx = ui.ctx();
+    let (em, state) = if style.has(Style::MATH) {
+        let em = size * MATH_SCALE;
+        let ppem = em * ctx.pixels_per_point();
+        let display = style.has(Style::DISPLAY);
+        (em, rc.pictures.math.get(ctx, source, display, color, ppem))
+    } else {
+        let em = if style.has(Style::SUP) || style.has(Style::SUB) {
+            size * 0.75
+        } else {
+            size
+        };
+        let ppem = em * ctx.pixels_per_point();
+        (em, rc.pictures.emoji.get(ctx, source, color, ppem))
+    };
+    let picture = match state {
+        State::Ready(picture) => picture,
+        State::Pending => {
             rc.pending = true;
             return None;
         }
-        MathState::Failed(_) => return None,
+        State::Failed(_) => return None,
     };
-    // The space is as wide as the formula: its font size makes it so (a
+    // The space is as wide as the picture: its font size makes it so (a
     // space has no outline, so no size of it takes room in the font atlas).
     let space_per_point =
         ui.fonts_mut(|f| f.glyph_width(&FontId::proportional(100.0), '\u{a0}')) / 100.0;
-    let font_size = (formula.size(em).x / space_per_point.max(0.01)).max(0.5);
+    let font_size = (picture.size(em).x / space_per_point.max(0.01)).max(0.5);
     // Text sits on the bottom of its row, its baseline `below` above it (see
-    // `text_format`); the row grows to fit the formula above the baseline.
+    // `text_format`); the row grows to fit the picture above the baseline.
     // Below it the leading is enough for most formulas.
     let line_height = (size * LINE_HEIGHT).round();
     let below = line_height - rc.fonts.body_ascent * size;
-    let needed = (formula.ascent(em) + below + 1.0).ceil();
+    let needed = (picture.ascent(em) + below + 1.0).ceil();
     let format = TextFormat {
         font_id: FontId::proportional(font_size),
         line_height: Some(needed.max(line_height)),
@@ -1044,35 +1061,35 @@ fn inline_math(
         valign: egui::Align::BOTTOM,
         ..Default::default()
     };
-    Some((format, formula, em))
+    Some((format, picture, em))
 }
 
-/// Paints the formulas of a laid-out [`RichJob`] over their spaces, on the
-/// baseline of their row.
-fn paint_inline_maths(
+/// Paints the formulas and emoji of a laid-out [`RichJob`] over their
+/// spaces, on the baseline of their row.
+fn paint_inline_pictures(
     ui: &Ui,
     galley: &Galley,
     pos: egui::Pos2,
-    maths: &[InlineMath],
+    pictures: &[InlinePicture],
     rc: &RenderCtx<'_>,
     size: f32,
 ) {
     let line_height = (size * LINE_HEIGHT).round();
     let below = line_height - rc.fonts.body_ascent * size;
     let painter = ui.painter();
-    for math in maths {
+    for inline in pictures {
         let cursor = egui::text::CCursor {
-            index: egui::text::CharIndex(math.char_index),
+            index: egui::text::CharIndex(inline.char_index),
             prefer_next_row: true,
         };
         // The cursor before the space spans the height of its row.
         let at = galley.pos_from_cursor(cursor).translate(pos.to_vec2());
         let left = at.min.x;
         let baseline = at.max.y - below;
-        if let Some(current) = math.found {
+        if let Some(current) = inline.found {
             let rect = Rect::from_min_size(
-                pos2(left, baseline - math.formula.ascent(math.em)),
-                math.formula.size(math.em),
+                pos2(left, baseline - inline.picture.ascent(inline.em)),
+                inline.picture.size(inline.em),
             )
             .expand(1.0);
             let fill = if current {
@@ -1082,7 +1099,7 @@ fn paint_inline_maths(
             };
             painter.rect_filled(rect, 2.0, fill);
         }
-        math.formula.paint(painter, left, baseline, math.em);
+        inline.picture.paint(painter, left, baseline, inline.em);
     }
 }
 
@@ -1129,7 +1146,7 @@ fn draw_rich_rows(
     let _ = heading;
     let RichJob {
         job,
-        maths,
+        pictures,
         char_bytes,
     } = rich_job(rich, rc, ui, size, extra);
     let label = Label::new(WidgetText::LayoutJob(Arc::new(job))).selectable(true);
@@ -1143,8 +1160,8 @@ fn draw_rich_rows(
             ui.visuals().text_color(),
             Stroke::NONE,
         );
-        if !maths.is_empty() {
-            paint_inline_maths(ui, &galley, pos, &maths, rc, size);
+        if !pictures.is_empty() {
+            paint_inline_pictures(ui, &galley, pos, &pictures, rc, size);
         }
     }
     if !rich.links.is_empty() {
@@ -1183,15 +1200,15 @@ fn draw_display_math(ui: &mut Ui, id: u32, tex: &str, rc: &mut RenderCtx<'_>, sa
     let color = ui.visuals().text_color();
     let ppem = em * ui.ctx().pixels_per_point();
     let formula = match rc.pictures.math.get(ui.ctx(), tex, true, color, ppem) {
-        MathState::Ready(formula) => formula,
-        MathState::Pending => {
+        State::Ready(formula) => formula,
+        State::Pending => {
             // About the height of a one-line formula, so little moves once
             // it is set.
             rc.pending = true;
             ui.allocate_exact_size(vec2(ui.available_width(), em * 1.6), Sense::hover());
             return;
         }
-        MathState::Failed(error) => {
+        State::Failed(error) => {
             draw_code(ui, id, None, "math", tex, rc, salt);
             ui.label(
                 RichText::new(error.as_ref())

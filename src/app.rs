@@ -10,6 +10,7 @@ use crate::single_instance::Server;
 use crate::style::{self, BODY_SIZE, FontChoice, Palette};
 use crate::ui::about::About;
 use crate::ui::diagram::DiagramRenderer;
+use crate::ui::emoji::EmojiRenderer;
 use crate::ui::find::FindState;
 use crate::ui::home::{self, HomeAction};
 use crate::ui::math::MathRenderer;
@@ -250,9 +251,11 @@ impl App {
         };
         let pictures = {
             let math_cell = startup.ctx_cell.clone();
+            let emoji_cell = startup.ctx_cell.clone();
             let diagram_cell = startup.ctx_cell.clone();
             Pictures {
                 math: MathRenderer::new(move || request_repaint(&math_cell)),
+                emoji: EmojiRenderer::new(move || request_repaint(&emoji_cell)),
                 diagrams: DiagramRenderer::new(move || request_repaint(&diagram_cell)),
             }
         };

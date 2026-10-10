@@ -3,6 +3,7 @@
 pub mod about;
 pub mod animation;
 pub mod diagram;
+pub mod emoji;
 pub mod find;
 pub mod home;
 pub mod math;
