@@ -33,26 +33,94 @@ pub fn app_icon(
     cache.clone().expect("set above")
 }
 
+/// A button with a 14-point icon that `paint` draws around the given centre
+/// in the button's text colour; the last argument is the button's fill, for
+/// cut-outs. `selected` gives it the look of a toggle that is on.
+fn icon_button(
+    ui: &mut Ui,
+    salt: &str,
+    selected: bool,
+    tip: &str,
+    paint: impl FnOnce(&egui::Painter, egui::Pos2, egui::Color32, egui::Color32),
+) -> Response {
+    let icon = ui.id().with(salt);
+    let resp = egui::Button::new(egui::Atom::custom(icon, egui::vec2(14.0, 14.0)))
+        .selected(selected)
+        .atom_ui(ui);
+    let response = resp.response.clone().on_hover_text(tip);
+    if let Some(rect) = resp.rect(icon) {
+        let visuals = ui.style().interact_selectable(&response, selected);
+        paint(
+            ui.painter(),
+            rect.center(),
+            visuals.text_color(),
+            visuals.weak_bg_fill,
+        );
+    }
+    response
+}
+
+/// Shows or hides the table of contents: an outline of a heading and two
+/// indented subheadings, highlighted while the panel is shown.
+pub fn toc_button(ui: &mut Ui, visible: bool) -> Response {
+    use egui::{Stroke, vec2};
+    let tip = if visible {
+        "Hide the table of contents (Ctrl+Shift+O)"
+    } else {
+        "Show the table of contents (Ctrl+Shift+O)"
+    };
+    icon_button(ui, "toc_icon", visible, tip, |painter, c, color, _| {
+        for (y, indent) in [(-4.0, 0.0), (0.0, 3.0), (4.0, 3.0)] {
+            painter.circle_filled(c + vec2(-5.0 + indent, y), 1.1, color);
+            painter.line_segment(
+                [c + vec2(-2.5 + indent, y), c + vec2(6.0, y)],
+                Stroke::new(1.3, color),
+            );
+        }
+    })
+}
+
+/// Opens the About window: an "i" in a circle.
+pub fn about_button(ui: &mut Ui) -> Response {
+    use egui::{Stroke, vec2};
+    icon_button(
+        ui,
+        "about_icon",
+        false,
+        "About MetalMD (F1)",
+        |painter, c, color, _| {
+            painter.circle_stroke(c, 6.0, Stroke::new(1.3, color));
+            painter.circle_filled(c + vec2(0.0, -2.8), 0.95, color);
+            painter.line_segment(
+                [c + vec2(0.0, -0.6), c + vec2(0.0, 3.4)],
+                Stroke::new(1.4, color),
+            );
+        },
+    )
+}
+
 /// The theme switch: a half-filled circle while following Windows, a sun
 /// for the light theme, a moon for the dark one; a click moves on to the
 /// next of the three.
 pub fn theme_button(ui: &mut Ui, theme: ThemeSetting) -> Response {
-    use egui::{Shape, Stroke, pos2, vec2};
-    let icon = ui.id().with("theme_icon");
-    let resp = egui::Button::new(egui::Atom::custom(icon, vec2(14.0, 14.0))).atom_ui(ui);
     let tip = match theme {
         ThemeSetting::System => "Theme: as in Windows (click: light)",
         ThemeSetting::Light => "Theme: light (click: dark)",
         ThemeSetting::Dark => "Theme: dark (click: as in Windows)",
     };
-    let response = resp.response.clone().on_hover_text(tip);
-    let Some(rect) = resp.rect(icon) else {
-        return response;
-    };
-    let visuals = ui.style().interact(&response);
-    let (color, fill) = (visuals.text_color(), visuals.weak_bg_fill);
-    let painter = ui.painter();
-    let c = rect.center();
+    icon_button(ui, "theme_icon", false, tip, |painter, c, color, fill| {
+        paint_theme_icon(painter, c, color, fill, theme);
+    })
+}
+
+fn paint_theme_icon(
+    painter: &egui::Painter,
+    c: egui::Pos2,
+    color: egui::Color32,
+    fill: egui::Color32,
+    theme: ThemeSetting,
+) {
+    use egui::{Shape, Stroke, pos2, vec2};
     match theme {
         ThemeSetting::System => {
             let r = 5.5;
@@ -81,7 +149,6 @@ pub fn theme_button(ui: &mut Ui, theme: ThemeSetting) -> Response {
             painter.circle_filled(pos2(c.x + 3.0, c.y - 2.2), 5.0, fill);
         }
     }
-    response
 }
 
 /// A cross that closes a dialog; true when clicked.

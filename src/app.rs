@@ -703,11 +703,7 @@ impl App {
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
-                        if ui
-                            .button(RichText::new("About").size(13.0))
-                            .on_hover_text("About MetalMD (F1)")
-                            .clicked()
-                        {
+                        if crate::ui::about_button(ui).clicked() {
                             self.about.toggle();
                         }
                         let theme = self.settings.theme;
@@ -716,6 +712,11 @@ impl App {
                             ui.ctx().set_theme(self.settings.theme.preference());
                             self.settings_dirty = true;
                         }
+                        if crate::ui::toc_button(ui, self.settings.toc_visible).clicked() {
+                            self.settings.toc_visible = !self.settings.toc_visible;
+                            self.settings_dirty = true;
+                        }
+                        // Left of the icons, so it doesn't split them up.
                         let zoom = ui.ctx().zoom_factor();
                         if (zoom - 1.0).abs() > 0.01
                             && ui
@@ -724,15 +725,6 @@ impl App {
                                 .clicked()
                         {
                             ui.ctx().set_zoom_factor(1.0);
-                        }
-                        let toc_label = RichText::new("Contents").size(13.0);
-                        if ui
-                            .selectable_label(self.settings.toc_visible, toc_label)
-                            .on_hover_text("Table of contents (Ctrl+Shift+O)")
-                            .clicked()
-                        {
-                            self.settings.toc_visible = !self.settings.toc_visible;
-                            self.settings_dirty = true;
                         }
                         if let Some(tab) = self.tabs.get(self.active) {
                             let mut status = Vec::new();
