@@ -5,6 +5,7 @@ authors = ["Fan4_Metal"]
 edition = "2024"
 description = "Fast native Markdown viewer"
 license = "MIT"
+repository = "https://github.com/Fan4Metal/qmarkdown"
 rust-version = "1.95"
 
 [dependencies]

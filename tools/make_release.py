@@ -28,7 +28,7 @@ EXE = ROOT / "target" / "release" / "qmarkdown.exe"
 ICON = ROOT / "target" / "app.ico"
 
 # Files the installer takes from the repository (see [Files] in setup.iss).
-BUNDLED_FILES = ["LICENSE", "THIRD_PARTY_LICENSES.md", "README.md"]
+BUNDLED_FILES = ["LICENSE", "THIRD_PARTY_LICENSES.md", "README.md", "README.ru.md"]
 # Licences shipped with the portable archive (the documentation is on GitHub);
 # THIRD_PARTY_LICENSES.md carries the BSD-3 notice of the code from Markpad.
 PORTABLE_FILES = ["LICENSE", "THIRD_PARTY_LICENSES.md"]

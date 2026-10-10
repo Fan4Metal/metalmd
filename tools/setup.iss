@@ -68,6 +68,7 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 ; BSD-3 notice of the code ported from Markpad: required with the binary.
 Source: "..\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\README.ru.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
