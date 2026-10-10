@@ -10,7 +10,6 @@
 mod app;
 mod bench;
 mod fs_text;
-#[cfg(test)]
 mod icon;
 mod markdown;
 mod settings;
@@ -34,6 +33,14 @@ fn main() -> eframe::Result {
         match arg.to_str() {
             Some("--bench") => bench_output = args.next().map(PathBuf::from),
             Some("--new-instance") => new_instance = true,
+            Some("--export-icon") => {
+                // For tools/make_release.py: the installer's icon, then exit.
+                let out = args.next().unwrap_or_else(|| "app.ico".into());
+                if std::fs::write(&out, icon::ico(&icon::ICO_SIZES)).is_err() {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
             Some(flag) if flag.starts_with("--") => {}
             _ => raw_paths.push(PathBuf::from(arg)),
         }

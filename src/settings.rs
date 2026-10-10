@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub const MAX_RECENT: usize = 9;
 
@@ -63,16 +64,61 @@ impl Default for Settings {
     }
 }
 
-/// Where the settings are kept.
-pub fn settings_path() -> Option<PathBuf> {
-    directories::ProjectDirs::from("", "", "qmarkdown")
-        .map(|dirs| dirs.config_dir().join("settings.json"))
+/// Settings file that makes a copy portable: when it lies next to the exe
+/// (even empty) and can be written, the settings are kept in it instead of
+/// the user profile. The portable zip ships an empty one.
+pub const PORTABLE_FILE: &str = "qmarkdown.json";
+
+/// Where the settings of this run are kept.
+#[derive(Debug)]
+pub struct Location {
+    /// The settings file, `None` if there is nowhere to keep it.
+    pub file: Option<PathBuf>,
+    /// `file` is [`PORTABLE_FILE`] next to the exe.
+    pub portable: bool,
+}
+
+/// Where the settings are kept, decided once per run.
+pub fn location() -> &'static Location {
+    static LOCATION: OnceLock<Location> = OnceLock::new();
+    LOCATION.get_or_init(|| {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(Path::to_path_buf));
+        match exe_dir.and_then(|d| portable_file_in(&d)) {
+            Some(file) => Location {
+                file: Some(file),
+                portable: true,
+            },
+            None => Location {
+                file: directories::ProjectDirs::from("", "", "qmarkdown")
+                    .map(|dirs| dirs.config_dir().join("settings.json")),
+                portable: false,
+            },
+        }
+    })
+}
+
+/// [`PORTABLE_FILE`] in `dir` if it is there and can be written; a copy on
+/// a read-only medium keeps its settings in the profile instead of losing
+/// them.
+fn portable_file_in(dir: &Path) -> Option<PathBuf> {
+    let file = dir.join(PORTABLE_FILE);
+    // Opening for appending checks the permission without changing the file.
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .ok()
+        .map(|_| file)
 }
 
 impl Settings {
-    /// Reads the settings file; missing or malformed files give defaults.
+    /// Reads the settings file; missing, empty or malformed files give
+    /// defaults.
     pub fn load() -> Settings {
-        settings_path()
+        location()
+            .file
+            .as_ref()
             .and_then(|path| std::fs::read(path).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .map(|mut settings: Settings| {
@@ -85,7 +131,7 @@ impl Settings {
     }
 
     pub fn save(&self) {
-        let Some(path) = settings_path() else {
+        let Some(path) = &location().file else {
             return;
         };
         if let Some(dir) = path.parent() {
@@ -94,7 +140,7 @@ impl Settings {
         if let Ok(bytes) = serde_json::to_vec_pretty(self) {
             let tmp = path.with_extension("json.tmp");
             if std::fs::write(&tmp, bytes).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
+                let _ = std::fs::rename(&tmp, path);
             }
         }
     }
@@ -142,6 +188,24 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn portable_file_only_when_present_and_writable() {
+        let dir = std::env::temp_dir().join(format!("qmd_portable_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(PORTABLE_FILE);
+        assert_eq!(portable_file_in(&dir), None);
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(portable_file_in(&dir), Some(file.clone()));
+        let mut perm = std::fs::metadata(&file).unwrap().permissions();
+        perm.set_readonly(true);
+        std::fs::set_permissions(&file, perm.clone()).unwrap();
+        assert_eq!(portable_file_in(&dir), None);
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        std::fs::set_permissions(&file, perm).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

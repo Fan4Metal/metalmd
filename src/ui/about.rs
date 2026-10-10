@@ -61,8 +61,13 @@ impl About {
                 if !LICENSE.is_empty() {
                     ui.weak(format!("{LICENSE} License"));
                 }
-                let place = ui.weak("Settings: in the user profile");
-                match crate::settings::settings_path() {
+                let stored = crate::settings::location();
+                let place = ui.weak(if stored.portable {
+                    "Settings: next to the program (portable)"
+                } else {
+                    "Settings: in the user profile"
+                });
+                match &stored.file {
                     Some(path) => place.on_hover_text(path.display().to_string()),
                     None => place.on_hover_text("Settings are not saved"),
                 };

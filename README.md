@@ -99,20 +99,45 @@ cargo build --release
 ```
 
 Готовый файл: `target\release\qmarkdown.exe`. Он один и не требует установки.
+C-рантайм вшит в exe (`.cargo/config.toml`), Visual C++ Redistributable не нужен.
 
-Чтобы открывать `.md` двойным щелчком, в контекстном меню файла выберите
-«Открыть с помощью» → «Выбрать другое приложение» → `qmarkdown.exe` →
-«Всегда использовать это приложение».
+`uv run build.py` делает то же самое, но сначала закрывает qmarkdown, запущенный
+из `target`: иначе exe занят и линковка падает.
+
+Релиз: `python tools/make_release.py [--no-tests] [--install]`. Он запускает тесты,
+release-сборку и [Inno Setup 6](https://jrsoftware.org/isinfo.php), а результат кладёт в `dist\`:
+
+- `qmarkdown_<версия>_Setup.exe` — установка для текущего пользователя без прав
+  администратора. Можно зарегистрировать qmarkdown для `.md`, `.markdown`, `.mdown`
+  и `.mkd` («Открыть с помощью» и «Приложения по умолчанию»).
+- `qmarkdown_<версия>_portable.zip` — exe с пустым `qmarkdown.json` рядом.
+
+`--install` после сборки тихо ставит её поверх установленной копии.
+
+Тег `vX.Y.Z` в GitHub запускает `.github/workflows/release.yml`: он собирает оба
+файла и публикует релиз. Тег должен совпадать с версией в `Cargo.toml`.
+
+Если qmarkdown не установлен через инсталлятор, а `.md` нужно открывать двойным
+щелчком, в контекстном меню файла выберите «Открыть с помощью» → «Выбрать другое
+приложение» → `qmarkdown.exe` → «Всегда использовать это приложение».
 
 Запуск с параметром `--new-instance` открывает отдельное окно вместо передачи файла
 уже запущенному.
 
 Настройки и список недавних файлов хранятся в
-`%APPDATA%\qmarkdown\config\settings.json`.
+`%APPDATA%\qmarkdown\config\settings.json`. Если рядом с exe лежит
+`qmarkdown.json` (можно пустой) и в него можно писать, они хранятся в нём
+(портативный режим).
 
 ## Устройство
 
 ```
+build.py               release-сборка с закрытием запущенного exe (uv run build.py)
+tools/
+  make_release.py      релиз: тесты, сборка, инсталлятор и portable zip в dist\
+  setup.iss            инсталлятор Inno Setup, ассоциации .md
+.github/workflows/
+  release.yml          сборка и публикация релиза по тегу vX.Y.Z
 build.rs               рисует иконку: .ico для exe и RGBA для окна и стартовой страницы
 src/
   icon.rs              процедурная иконка (лист с меткой Markdown), её же использует build.rs

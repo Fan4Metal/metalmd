@@ -16,7 +16,11 @@ cargo test wikilink            # tests whose name contains "wikilink"
 cargo test markdown::preprocess::tests::copy_reference_output_becomes_a_real_link
 cargo clippy --all-targets     # kept at zero warnings
 cargo fmt
+uv run build.py                # release build, first closing a qmarkdown.exe running from target\
+python tools/make_release.py   # tests + release build + dist\qmarkdown_<ver>_Setup.exe and _portable.zip (needs Inno Setup 6); --no-tests, --install
 ```
+
+Releases: pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which runs `make_release.py` and publishes both files. The tag must equal the version in `Cargo.toml`. `tools/setup.iss` installs per user. Its `assoc` task registers `.md`, `.markdown`, `.mdown` and `.mkd` through `[Registry]` entries: a ProgID, OpenWithProgids and Default apps capabilities. qview does this from its exe with `--register`; qmarkdown has no such code. `make_release.py` gets the installer icon from `qmarkdown.exe --export-icon <file>`. `.cargo/config.toml` links the CRT statically, so no VCRUNTIME140.dll is needed. These scripts mirror qview's and disk_flashlight's; keep them in step.
 
 Measure startup (writes ms-since-process-creation marks as JSON, then exits):
 
@@ -26,7 +30,7 @@ target\release\qmarkdown.exe --bench timings.json samples\markdown-syntax.md
 
 Marks: `main`, `run_native`, `event_loop`, `window_builder`, `app_new`, `fonts_ready`, `first_frame_start`, `doc_ready`, `doc_frame_end`, `next_frame_end`. Baseline on the dev machine: `doc_frame_end` ≈ 168 ms for the 27 KB sample, ≈ 208 ms for 4.9 MB. About 130 ms of that is OpenGL context creation (`window_builder` → `app_new`). Use `--new-instance` when launching for manual testing so the single-instance hand-off doesn't route the file into an already-open window.
 
-Release builds use `windows_subsystem = "windows"` (no console); debug builds keep the console. Settings are written to `%APPDATA%\qmarkdown\config\settings.json` by any non-`--bench` run.
+Release builds use `windows_subsystem = "windows"` (no console); debug builds keep the console. Any non-`--bench` run writes the settings. They go to `%APPDATA%\qmarkdown\config\settings.json`, or to `qmarkdown.json` next to the exe when that file exists and can be written (portable mode, `settings::location`). The portable zip ships an empty `qmarkdown.json`.
 
 ## Architecture
 
