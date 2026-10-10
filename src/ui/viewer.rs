@@ -694,19 +694,33 @@ fn draw_inlines(
         return;
     }
 
+    // Draws the items and tells whether they took more than one row: an item
+    // starts below the row so far, or a text run wraps by itself. A tall
+    // image alone is still one row.
     let mut flow = |ui: &mut Ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
+        let mut row_bottom = f32::NEG_INFINITY;
+        let mut wrapped = false;
         for inline in inlines {
-            match inline {
+            let rect = match inline {
                 Inline::Text(rich) => {
-                    draw_rich(ui, rich, rc, size, extra, heading);
+                    // Not the height: in a row with a tall image egui makes
+                    // the text's first row as tall as the image.
+                    let (response, rows) = draw_rich_rows(ui, rich, rc, size, extra, heading);
+                    wrapped |= rows > 1;
+                    response.rect
                 }
-                Inline::Image(image) => draw_image(ui, image, rc),
+                Inline::Image(image) => draw_image(ui, image, rc).rect,
+            };
+            if row_bottom.is_finite() {
+                wrapped |= rect.min.y >= row_bottom - 0.5;
             }
+            row_bottom = row_bottom.max(rect.max.y);
         }
+        wrapped
     };
     if align == Align::Left {
-        ui.horizontal_wrapped(flow);
+        ui.horizontal_wrapped(|ui| flow(ui));
         return;
     }
     // Wrapped rows cannot be centered by egui's layouts, so remember the
@@ -725,9 +739,7 @@ fn draw_inlines(
         };
         ui.add_space(pad);
         let start = ui.cursor().min.x;
-        flow(ui);
-        let rows_used = ui.min_rect().height() > size * LINE_HEIGHT * 1.6 + 4.0;
-        if rows_used {
+        if flow(ui) {
             available
         } else {
             (ui.min_rect().max.x - start).max(1.0)
@@ -925,6 +937,18 @@ fn draw_rich(
     extra: Style,
     heading: bool,
 ) -> Response {
+    draw_rich_rows(ui, rich, rc, size, extra, heading).0
+}
+
+/// [`draw_rich`], also returning the number of rows the text took.
+fn draw_rich_rows(
+    ui: &mut Ui,
+    rich: &Rich,
+    rc: &mut RenderCtx<'_>,
+    size: f32,
+    extra: Style,
+    heading: bool,
+) -> (Response, usize) {
     let _ = heading;
     let job = rich_job(rich, rc, size, extra);
     let label = Label::new(WidgetText::LayoutJob(Arc::new(job))).selectable(true);
@@ -961,7 +985,7 @@ fn draw_rich(
             .show(|ui| ui.label(RichText::new(target).size(12.0)));
         }
     }
-    response
+    (response, galley.rows.len())
 }
 
 /// `file://` URI or http(s) URL for an image source written in a document.
@@ -1009,7 +1033,7 @@ fn file_uri(path: &Path) -> String {
     }
 }
 
-fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) {
+fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) -> Response {
     let available = ui.available_width().max(16.0);
     let fallback = |ui: &mut Ui, rc: &mut RenderCtx<'_>| {
         let alt = if image.alt.is_empty() {
@@ -1027,10 +1051,10 @@ fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) {
                 rc.actions.push(ViewAction::OpenLink(link.clone()));
             }
         }
+        response
     };
     let Some(uri) = image_uri(&image.src, rc.base_dir) else {
-        fallback(ui, rc);
-        return;
+        return fallback(ui, rc);
     };
     // Space before an image that follows text on the same row.
     let mut widget = egui::Image::new(uri)
@@ -1053,8 +1077,7 @@ fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) {
         .load_for_size(ui.ctx(), vec2(available, f32::INFINITY))
         .is_err()
     {
-        fallback(ui, rc);
-        return;
+        return fallback(ui, rc);
     }
     let sense = if image.link.is_some() {
         Sense::click()
@@ -1070,6 +1093,7 @@ fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) {
             rc.actions.push(ViewAction::OpenLink(link.clone()));
         }
     }
+    response
 }
 
 fn code_job(code: &str, highlights: Option<&[HlSpan]>, rc: &RenderCtx<'_>, id: u32) -> LayoutJob {
