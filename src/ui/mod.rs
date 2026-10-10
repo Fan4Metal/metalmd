@@ -4,6 +4,7 @@ pub mod about;
 pub mod animation;
 pub mod find;
 pub mod home;
+pub mod math;
 pub mod svg;
 pub mod toc;
 pub mod viewer;

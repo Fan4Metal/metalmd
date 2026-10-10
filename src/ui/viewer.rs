@@ -6,12 +6,13 @@
 //! out taller or shorter than estimated, so the text being read never jumps.
 
 use crate::markdown::document::{
-    Align, Block, Document, ImageRef, Inline, ListItem, Rich, Style, Table,
+    AlertKind, Align, Block, Document, ImageRef, Inline, ListItem, Rich, Span, Style, Table,
 };
 use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
 use crate::style::{BODY_SIZE, FontChoice, MAX_CONTENT_WIDTH, Palette};
 use crate::ui::find::{FindState, Match};
+use crate::ui::math::{Formula, MathRenderer, MathState};
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
 use egui::{
@@ -25,6 +26,9 @@ use std::time::{Duration, Instant};
 
 /// Space between blocks.
 const GAP: f32 = BODY_SIZE * 0.9;
+/// Formulas are this much larger than the text around them, as KaTeX's
+/// (its fonts look small next to most text faces).
+const MATH_SCALE: f32 = 1.21;
 const LINE_HEIGHT: f32 = 1.5;
 const CODE_SCALE: f32 = 0.875;
 const SIDE_PADDING: f32 = 28.0;
@@ -116,11 +120,15 @@ pub struct RenderCtx<'a> {
     /// Changes whenever the font set changes (CJK fallback loaded).
     pub fonts_generation: u64,
     pub highlighter: &'a Highlighter,
+    pub math: &'a MathRenderer,
     pub base_dir: Option<&'a Path>,
     pub find: &'a FindState,
     pub actions: Vec<ViewAction>,
     hover: Option<(u32, u32)>,
     new_hover: Option<(u32, u32)>,
+    /// A formula drawn since this was last cleared is still being typeset,
+    /// so the block's height is not final.
+    math_pending: bool,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -129,6 +137,7 @@ impl<'a> RenderCtx<'a> {
         fonts: &'a FontChoice,
         fonts_generation: u64,
         highlighter: &'a Highlighter,
+        math: &'a MathRenderer,
         base_dir: Option<&'a Path>,
         find: &'a FindState,
     ) -> Self {
@@ -137,11 +146,13 @@ impl<'a> RenderCtx<'a> {
             fonts,
             fonts_generation,
             highlighter,
+            math,
             base_dir,
             find,
             actions: Vec::new(),
             hover: None,
             new_hover: None,
+            math_pending: false,
         }
     }
 }
@@ -237,8 +248,10 @@ pub fn show_document(
                     pos2(left, origin.y + offsets[cursor]),
                     vec2(content_width, 1.0e5),
                 );
+                rc.math_pending = false;
                 view.heights[cursor] = draw_top_block(ui, doc, cursor, rect, rc, true);
-                view.measured[cursor] = true;
+                // Measured again in a later frame, once its formulas are set.
+                view.measured[cursor] = !rc.math_pending;
                 remaining -= 1;
             }
             cursor = (cursor + 1) % count;
@@ -365,7 +378,7 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
         } => {
             draw_code(ui, *id, Some(*key), lang, code, rc, salt);
         }
-        Block::Math { id, tex } => draw_code(ui, *id, None, "math", tex, rc, salt),
+        Block::Math { id, tex } => draw_display_math(ui, *id, tex, rc, salt),
         Block::FrontMatter { id, yaml } => {
             egui::CollapsingHeader::new(
                 egui::RichText::new(tr!("Front matter", "Метаданные")).color(rc.palette.muted),
@@ -811,9 +824,10 @@ fn text_format(rc: &RenderCtx<'_>, style: Style, size: f32) -> TextFormat {
         } else {
             rc.fonts.body_ascent
         };
-    let (run_line_height, valign) = if style.has(Style::SUP) {
-        (line_height, egui::Align::TOP)
-    } else if style.has(Style::SUB) {
+    // A superscript keeps its place above the baseline in a row made taller
+    // by a formula: in a row of the usual height bottom and top alignment
+    // put it at the same place.
+    let (run_line_height, valign) = if style.has(Style::SUB) {
         (
             line_height - (body_ascent - run_ascent) - size * 0.2,
             egui::Align::BOTTOM,
@@ -890,11 +904,55 @@ fn append_with_matches(
     }
 }
 
-fn rich_job(rich: &Rich, rc: &RenderCtx<'_>, size: f32, extra: Style) -> LayoutJob {
+/// An inline formula in a [`LayoutJob`]: a no-break space as wide as the
+/// formula, which the formula is painted over.
+struct InlineMath {
+    /// The index of the space among the job's characters.
+    char_index: usize,
+    formula: Arc<Formula>,
+    /// Points per em.
+    em: f32,
+    /// A search match falls in the formula; `true` for the current one.
+    found: Option<bool>,
+}
+
+/// The text of a `Rich` as a layout job, its typeset formulas left as
+/// spaces for [`paint_inline_maths`].
+struct RichJob {
+    job: LayoutJob,
+    maths: Vec<InlineMath>,
+    /// Byte offset in `Rich::text` of each character of the job, when they
+    /// differ: a formula is one character in the job.
+    char_bytes: Option<Vec<usize>>,
+}
+
+fn rich_job(rich: &Rich, rc: &mut RenderCtx<'_>, ui: &Ui, size: f32, extra: Style) -> RichJob {
     let (matches, current) = rc.find.matches_in(rich.id);
+    let line_height = (size * LINE_HEIGHT).round();
+    let has_math = rich.spans.iter().any(|s| s.style.has(Style::MATH));
+    let mut char_bytes = Vec::new();
     let mut job = LayoutJob::default();
+    let mut maths = Vec::new();
     for span in &rich.spans {
-        let mut format = text_format(rc, span.style | extra, size);
+        let style = span.style | extra;
+        if style.has(Style::MATH)
+            && let Some((format, formula, em)) = inline_math(rich, span, style, rc, ui, size)
+        {
+            let found = matches
+                .iter()
+                .position(|m| m.range.start < span.range.end && span.range.start < m.range.end)
+                .map(|k| Some(k) == current);
+            maths.push(InlineMath {
+                char_index: char_bytes.len(),
+                formula,
+                em,
+                found,
+            });
+            job.append("\u{a0}", 0.0, format);
+            char_bytes.push(span.range.start);
+            continue;
+        }
+        let mut format = text_format(rc, style, size);
         if let (Some(link), Some((id, hovered))) = (span.link, rc.hover)
             && id == rich.id
             && hovered == link
@@ -910,15 +968,114 @@ fn rich_job(rich: &Rich, rc: &RenderCtx<'_>, size: f32, extra: Style) -> LayoutJ
             current,
             rc.palette,
         );
+        if has_math {
+            char_bytes.extend(
+                rich.text[span.range.clone()]
+                    .char_indices()
+                    .map(|(i, _)| span.range.start + i),
+            );
+        }
     }
     // A row of only inline code would otherwise be shorter than a row of
     // text, which shows as misaligned table cells.
-    job.first_row_min_height = (size * LINE_HEIGHT).round();
-    job
+    job.first_row_min_height = line_height;
+    RichJob {
+        job,
+        char_bytes: (!maths.is_empty()).then_some(char_bytes),
+        maths,
+    }
 }
 
-/// Byte offset of the character under `local` (relative to the galley).
-fn char_under(galley: &Galley, local: Vec2, text: &str) -> Option<usize> {
+/// The format of the space that stands for an inline formula, the formula
+/// and its points per em; `None` (the TeX is shown as code) until it is
+/// typeset or if it cannot be.
+fn inline_math(
+    rich: &Rich,
+    span: &Span,
+    style: Style,
+    rc: &mut RenderCtx<'_>,
+    ui: &Ui,
+    size: f32,
+) -> Option<(TextFormat, Arc<Formula>, f32)> {
+    let em = size * MATH_SCALE;
+    let color = if style.has(Style::LINK) {
+        rc.palette.link
+    } else {
+        ui.visuals().text_color()
+    };
+    let tex = &rich.text[span.range.clone()];
+    let display = style.has(Style::DISPLAY);
+    let ppem = em * ui.ctx().pixels_per_point();
+    let formula = match rc.math.get(ui.ctx(), tex, display, color, ppem) {
+        MathState::Ready(formula) => formula,
+        MathState::Pending => {
+            rc.math_pending = true;
+            return None;
+        }
+        MathState::Failed(_) => return None,
+    };
+    // The space is as wide as the formula: its font size makes it so (a
+    // space has no outline, so no size of it takes room in the font atlas).
+    let space_per_point =
+        ui.fonts_mut(|f| f.glyph_width(&FontId::proportional(100.0), '\u{a0}')) / 100.0;
+    let font_size = (formula.width * em / space_per_point.max(0.01)).max(0.5);
+    // Text sits on the bottom of its row, its baseline `below` above it (see
+    // `text_format`); the row grows to fit the formula above the baseline.
+    // Below it the leading is enough for most formulas.
+    let line_height = (size * LINE_HEIGHT).round();
+    let below = line_height - rc.fonts.body_ascent * size;
+    let needed = (formula.height * em + below + 1.0).ceil();
+    let format = TextFormat {
+        font_id: FontId::proportional(font_size),
+        line_height: Some(needed.max(line_height)),
+        color: Color32::TRANSPARENT,
+        valign: egui::Align::BOTTOM,
+        ..Default::default()
+    };
+    Some((format, formula, em))
+}
+
+/// Paints the formulas of a laid-out [`RichJob`] over their spaces, on the
+/// baseline of their row.
+fn paint_inline_maths(
+    ui: &Ui,
+    galley: &Galley,
+    pos: egui::Pos2,
+    maths: &[InlineMath],
+    rc: &RenderCtx<'_>,
+    size: f32,
+) {
+    let line_height = (size * LINE_HEIGHT).round();
+    let below = line_height - rc.fonts.body_ascent * size;
+    let painter = ui.painter();
+    for math in maths {
+        let cursor = egui::text::CCursor {
+            index: egui::text::CharIndex(math.char_index),
+            prefer_next_row: true,
+        };
+        // The cursor before the space spans the height of its row.
+        let at = galley.pos_from_cursor(cursor).translate(pos.to_vec2());
+        let left = at.min.x;
+        let baseline = at.max.y - below;
+        if let Some(current) = math.found {
+            let rect = Rect::from_min_size(
+                pos2(left, baseline - math.formula.height * math.em),
+                math.formula.size(math.em),
+            )
+            .expand(1.0);
+            let fill = if current {
+                rc.palette.search_current_bg
+            } else {
+                rc.palette.search_bg
+            };
+            painter.rect_filled(rect, 2.0, fill);
+        }
+        math.formula.paint(painter, left, baseline, math.em);
+    }
+}
+
+/// Index of the character under `local` (relative to the galley).
+fn char_under(galley: &Galley, local: Vec2) -> Option<usize> {
     let point = local.to_pos2();
     if !galley
         .rows
@@ -934,7 +1091,7 @@ fn char_under(galley: &Galley, local: Vec2, text: &str) -> Option<usize> {
     if index > 0 && galley.pos_from_cursor(cursor).min.x > point.x {
         index -= 1;
     }
-    text.char_indices().nth(index).map(|(byte, _)| byte)
+    Some(index)
 }
 
 fn draw_rich(
@@ -958,7 +1115,11 @@ fn draw_rich_rows(
     heading: bool,
 ) -> (Response, usize) {
     let _ = heading;
-    let job = rich_job(rich, rc, size, extra);
+    let RichJob {
+        job,
+        maths,
+        char_bytes,
+    } = rich_job(rich, rc, ui, size, extra);
     let label = Label::new(WidgetText::LayoutJob(Arc::new(job))).selectable(true);
     let (pos, galley, response) = label.layout_in_ui(ui);
     if ui.is_rect_visible(response.rect) {
@@ -970,11 +1131,18 @@ fn draw_rich_rows(
             ui.visuals().text_color(),
             Stroke::NONE,
         );
+        if !maths.is_empty() {
+            paint_inline_maths(ui, &galley, pos, &maths, rc, size);
+        }
     }
     if !rich.links.is_empty() {
         let hovered = response
             .hover_pos()
-            .and_then(|pointer| char_under(&galley, pointer - pos, &rich.text))
+            .and_then(|pointer| char_under(&galley, pointer - pos))
+            .and_then(|index| match &char_bytes {
+                Some(bytes) => bytes.get(index).copied(),
+                None => rich.text.char_indices().nth(index).map(|(byte, _)| byte),
+            })
             .and_then(|byte| rich.link_at(byte));
         if let Some(link) = hovered {
             let target = rich.links[link as usize].clone();
@@ -994,6 +1162,68 @@ fn draw_rich_rows(
         }
     }
     (response, galley.rows.len())
+}
+
+/// A `$$ … $$` block: the formula centred, scrolled sideways when wider than
+/// the page. TeX that cannot be typeset is shown as code with the error.
+fn draw_display_math(ui: &mut Ui, id: u32, tex: &str, rc: &mut RenderCtx<'_>, salt: u64) {
+    let em = BODY_SIZE * MATH_SCALE;
+    let color = ui.visuals().text_color();
+    let ppem = em * ui.ctx().pixels_per_point();
+    let formula = match rc.math.get(ui.ctx(), tex, true, color, ppem) {
+        MathState::Ready(formula) => formula,
+        MathState::Pending => {
+            // About the height of a one-line formula, so little moves once
+            // it is set.
+            rc.math_pending = true;
+            ui.allocate_exact_size(vec2(ui.available_width(), em * 1.6), Sense::hover());
+            return;
+        }
+        MathState::Failed(error) => {
+            draw_code(ui, id, None, "math", tex, rc, salt);
+            ui.label(
+                RichText::new(error.as_ref())
+                    .size(12.0)
+                    .color(rc.palette.alert(AlertKind::Caution)),
+            );
+            return;
+        }
+    };
+    let (matches, current) = rc.find.matches_in(id);
+    let found = (!matches.is_empty()).then(|| current.is_some());
+    // A little room above and below for tall symbols' antialiasing.
+    let margin = 4.0;
+    let size = formula.size(em) + vec2(0.0, 2.0 * margin);
+    let draw = |ui: &mut Ui| {
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        if ui.is_rect_visible(rect) {
+            let baseline = rect.top() + margin + formula.height * em;
+            if let Some(current) = found {
+                let fill = if current {
+                    rc.palette.search_current_bg
+                } else {
+                    rc.palette.search_bg
+                };
+                ui.painter()
+                    .rect_filled(rect.shrink2(vec2(0.0, margin - 2.0)), 3.0, fill);
+            }
+            formula.paint(ui.painter(), rect.left(), baseline, em);
+        }
+        response.context_menu(|ui| {
+            if ui.button(tr!("Copy TeX", "Копировать TeX")).clicked() {
+                ui.ctx().copy_text(tex.to_owned());
+                ui.close();
+            }
+        });
+    };
+    if size.x <= ui.available_width() {
+        ui.vertical_centered(draw);
+    } else {
+        ScrollArea::horizontal()
+            .id_salt(("math-scroll", salt))
+            .auto_shrink([false, true])
+            .show(ui, draw);
+    }
 }
 
 /// `file://` URI or http(s) URL for an image source written in a document.

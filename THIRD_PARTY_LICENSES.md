@@ -55,6 +55,10 @@ symbols and emoji (and as the main fonts where no system font is found):
 
 The license texts ship with the `epaint_default_fonts` crate.
 
+The KaTeX fonts (`KaTeX_*.ttf`, from [KaTeX](https://github.com/KaTeX/KaTeX)),
+used for formulas, are embedded through the `ratex-katex-fonts` crate under the
+SIL Open Font License 1.1; the license text ships with that crate.
+
 On Windows the system fonts Segoe UI, Consolas, Segoe UI Symbol and (for CJK
 documents) Microsoft YaHei / Malgun Gothic are read from `%WINDIR%\Fonts` at run
 time; they are not redistributed.

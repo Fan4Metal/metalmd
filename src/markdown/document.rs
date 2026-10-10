@@ -28,6 +28,8 @@ impl Style {
     pub const MATH: Style = Style(1 << 8);
     pub const KBD: Style = Style(1 << 9);
     pub const SUB: Style = Style(1 << 10);
+    /// With `MATH`: `$$ … $$` inside a paragraph, typeset in display style.
+    pub const DISPLAY: Style = Style(1 << 11);
 
     pub fn has(self, other: Style) -> bool {
         self.0 & other.0 == other.0
@@ -143,7 +145,7 @@ pub enum Block {
         lang: String,
         code: String,
     },
-    /// `$$ … $$` on its own: shown as preformatted text (no TeX rendering).
+    /// `$$ … $$` on its own: typeset centred on its own row.
     Math {
         id: u32,
         tex: String,
@@ -676,6 +678,12 @@ impl InlineCtx {
     }
 
     fn push_text(&mut self, text: &str, style: Style) {
+        self.push_span(text, style, true);
+    }
+
+    /// Appends `text`, continuing the last span if it has the same style and
+    /// `merge` allows it.
+    fn push_span(&mut self, text: &str, style: Style, merge: bool) {
         if text.is_empty() {
             return;
         }
@@ -729,6 +737,7 @@ impl InlineCtx {
         self.cur.text.push_str(&text);
         let end = self.cur.text.len();
         if let Some(last) = self.cur.spans.last_mut()
+            && merge
             && last.style == style
             && last.link == link
             && last.range.end == start
@@ -787,7 +796,15 @@ impl InlineCtx {
             NodeValue::Text(text) => self.push_text(text, style),
             NodeValue::SoftBreak | NodeValue::LineBreak => self.push_text("\n", style),
             NodeValue::Code(code) => self.push_text(&code.literal, style | Style::CODE),
-            NodeValue::Math(math) => self.push_text(&math.literal, style | Style::MATH),
+            NodeValue::Math(math) => {
+                let display = if math.display_math {
+                    Style::DISPLAY
+                } else {
+                    Style::NONE
+                };
+                // Each formula is a span of its own, even right after another.
+                self.push_span(&math.literal, style | Style::MATH | display, false);
+            }
             NodeValue::HtmlInline(raw) => {
                 let raw = raw.clone();
                 drop(data);
@@ -1369,6 +1386,19 @@ mod tests {
             "{:?}",
             doc.blocks[1]
         );
+    }
+
+    #[test]
+    fn each_formula_is_a_span_of_its_own() {
+        let doc = Document::parse("$a$$b$ and $$c$$ end\n");
+        let rich = first_rich(&doc.blocks[0]);
+        let maths: Vec<(&str, bool)> = rich
+            .spans
+            .iter()
+            .filter(|s| s.style.has(Style::MATH))
+            .map(|s| (&rich.text[s.range.clone()], s.style.has(Style::DISPLAY)))
+            .collect();
+        assert_eq!(maths, vec![("a", false), ("b", false), ("c", true)]);
     }
 
     #[test]

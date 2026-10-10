@@ -11,6 +11,7 @@ use crate::style::{self, BODY_SIZE, FontChoice, Palette};
 use crate::ui::about::About;
 use crate::ui::find::FindState;
 use crate::ui::home::{self, HomeAction};
+use crate::ui::math::MathRenderer;
 use crate::ui::toc;
 use crate::ui::viewer::{self, RenderCtx, ViewAction, ViewState};
 use crate::watcher::FileWatcher;
@@ -175,6 +176,7 @@ pub struct App {
     settings: Settings,
     settings_dirty: bool,
     highlighter: Highlighter,
+    math: MathRenderer,
     base_fonts: FontDefinitions,
     fonts: FontChoice,
     fonts_generation: u64,
@@ -244,6 +246,10 @@ impl App {
             let cell = startup.ctx_cell.clone();
             Highlighter::new(move || request_repaint(&cell))
         };
+        let math = {
+            let cell = startup.ctx_cell.clone();
+            MathRenderer::new(move || request_repaint(&cell))
+        };
 
         let next_id = startup
             .tabs
@@ -268,6 +274,7 @@ impl App {
             settings: startup.settings,
             settings_dirty: false,
             highlighter,
+            math,
             base_fonts,
             fonts,
             fonts_generation: 0,
@@ -1039,6 +1046,7 @@ impl eframe::App for App {
                             &self.fonts,
                             self.fonts_generation,
                             &self.highlighter,
+                            &self.math,
                             base_dir.as_deref(),
                             &self.find,
                         );
