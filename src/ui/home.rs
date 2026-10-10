@@ -24,9 +24,15 @@ pub fn show(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
-                // The icon's bottom edge at the middle of the window, as in
-                // qview and Disk Flashlight.
-                ui.add_space((ui.available_height() * 0.5 - ICON).max(16.0));
+                // The whole page (with the recent files) a little above the
+                // middle of the window. Its height comes from the previous
+                // pass; an unknown or changed height makes egui lay the frame
+                // out again before painting, so the page does not jump.
+                let height_id = ui.id().with("home-height");
+                let known: Option<f32> = ui.data(|d| d.get_temp(height_id));
+                let top = known.map_or(16.0, |h| ((ui.available_height() - h) * 0.4).max(16.0));
+                ui.add_space(top);
+                let start = ui.cursor().min.y;
                 ui.image((icon.id(), egui::vec2(ICON, ICON)));
                 ui.add_space(14.0);
                 ui.label(RichText::new("qmarkdown").size(30.0).strong());
@@ -44,6 +50,11 @@ pub fn show(
                         }
                     }
                     ui.add_space(16.0);
+                }
+                let height = ui.cursor().min.y - start;
+                if known.is_none_or(|h| (h - height).abs() > 0.5) {
+                    ui.data_mut(|d| d.insert_temp(height_id, height));
+                    ui.ctx().request_discard("start page height");
                 }
             });
         });
