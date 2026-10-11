@@ -17,6 +17,7 @@ mod caption;
 mod fs_text;
 mod icon;
 mod markdown;
+mod placement;
 mod settings;
 mod single_instance;
 mod style;
@@ -91,7 +92,8 @@ fn main() -> eframe::Result {
         Some(window) => {
             viewport = viewport
                 .with_inner_size([window.width, window.height])
-                .with_position([window.x.max(-20.0), window.y.max(-20.0)])
+                // `App::new` moves it back if it is off every screen.
+                .with_position([window.x, window.y])
                 .with_maximized(window.maximized);
             false
         }

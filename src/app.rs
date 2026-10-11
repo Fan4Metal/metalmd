@@ -219,6 +219,7 @@ impl App {
         // Windows theme. Following Windows, winit has already done it.
         let hwnd = crate::caption::hwnd(cc);
         if let Some(hwnd) = hwnd {
+            crate::placement::keep_on_screen(hwnd);
             match startup.settings.theme {
                 ThemeSetting::Dark => crate::caption::set_dark(hwnd, true),
                 ThemeSetting::Light => crate::caption::set_dark(hwnd, false),
@@ -952,15 +953,19 @@ impl App {
     }
 
     fn remember_window(&mut self, ctx: &egui::Context) {
+        // egui reports the window in zoomed points, and the next start
+        // creates it before the zoom is set: kept unzoomed, it would shrink
+        // by the zoom at each start.
+        let zoom = ctx.zoom_factor();
         let geometry = ctx.input(|i| {
             let viewport = i.viewport();
             let outer = viewport.outer_rect?;
             let inner = viewport.inner_rect?;
             Some(crate::settings::WindowGeometry {
-                x: outer.min.x,
-                y: outer.min.y,
-                width: inner.width(),
-                height: inner.height(),
+                x: outer.min.x * zoom,
+                y: outer.min.y * zoom,
+                width: inner.width() * zoom,
+                height: inner.height() * zoom,
                 maximized: viewport.maximized.unwrap_or(false),
             })
         });
