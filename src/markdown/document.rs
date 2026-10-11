@@ -220,6 +220,7 @@ pub struct Document {
 impl Document {
     /// Parses `source` (already decoded) into the render model.
     pub fn parse(source: &str) -> Document {
+        let source = &*without_copy_markers(source);
         let preprocessed = preprocess::preprocess(source);
         let arena = Arena::new();
         let options = preprocess::markdown_options();
@@ -250,6 +251,21 @@ impl Document {
             has_code: builder.has_code,
             scripts: detect_scripts(source),
         }
+    }
+}
+
+/// The invisible operators U+2062–U+2064, which `ui::copy` marks pictures
+/// with in the text egui copies, left out of the document: in its text they
+/// would be read as such marks. They draw as nothing, and copying dropped
+/// them anyway.
+fn without_copy_markers(source: &str) -> std::borrow::Cow<'_, str> {
+    const MARKERS: [char; 3] = ['\u{2062}', '\u{2063}', '\u{2064}'];
+    // Three searches for one character each (memchr) cost far less than one
+    // for any of three, on a large file.
+    if MARKERS.iter().any(|&c| source.contains(c)) {
+        source.replace(MARKERS, "").into()
+    } else {
+        source.into()
     }
 }
 
@@ -1782,6 +1798,13 @@ mod tests {
         let emphasis = format!("{}a{}", "*".repeat(20000), "*".repeat(20000));
         let emphasis = Document::parse(&emphasis);
         assert!(emphasis.search.iter().any(|s| s.text.contains('a')));
+    }
+
+    #[test]
+    fn copy_markers_in_the_text_are_left_out() {
+        let doc = Document::parse("x\u{2063}\u{2064}\u{a0}y \u{2062}z\n\n```\na\u{2064}b\n```\n");
+        assert_eq!(first_rich(&doc.blocks[0]).text, "x\u{a0}y z");
+        assert!(matches!(&doc.blocks[1], Block::Code { code, .. } if code == "ab"));
     }
 
     #[test]
