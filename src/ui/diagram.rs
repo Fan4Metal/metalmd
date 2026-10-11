@@ -82,7 +82,8 @@ mod tests {
 
     #[test]
     fn every_sample_diagram_renders_in_both_themes() {
-        let sample = include_str!("../../samples/markdown-syntax.md");
+        // A checkout on Windows can have CRLF line ends.
+        let sample = include_str!("../../samples/markdown-syntax.md").replace("\r\n", "\n");
         let mut count = 0;
         for block in sample.split("```mermaid\n").skip(1) {
             let source = block.split("```").next().unwrap();
