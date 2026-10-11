@@ -563,6 +563,10 @@ pub fn process_internal_embeds(content: &str) -> Cow<'_, str> {
         let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         let mut parts = inner.split('|');
         let path = parts.next().unwrap_or("").trim();
+        // Nothing to embed: left as typed, not an image of the folder.
+        if path.is_empty() {
+            return caps[0].to_owned();
+        }
         let size = parts.next().map(str::trim).filter(|size| {
             !size.is_empty() && size.chars().all(|c| c.is_ascii_digit() || c == 'x')
         });

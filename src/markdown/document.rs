@@ -1114,11 +1114,7 @@ impl InlineCtx {
                     let Some(src) = html::attr(attrs, "src") else {
                         return;
                     };
-                    let size = |key: &str| {
-                        html::attr(attrs, key)
-                            .and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok())
-                            .filter(|v| *v > 0.0)
-                    };
+                    let size = |key: &str| html::attr(attrs, key).and_then(|v| image_size(&v));
                     let image = ImageRef {
                         src: src.into_owned(),
                         alt: html::attr(attrs, "alt").unwrap_or_default().into_owned(),
@@ -1196,9 +1192,17 @@ impl InlineCtx {
 
 fn parse_embed_size(size: &str) -> (Option<f32>, Option<f32>) {
     let mut parts = size.split('x');
-    let width = parts.next().and_then(|w| w.parse().ok());
-    let height = parts.next().and_then(|h| h.parse().ok());
+    let width = parts.next().and_then(image_size);
+    let height = parts.next().and_then(image_size);
     (width, height)
+}
+
+/// An image's width or height as written (`300`, `300px`): a size only if
+/// it is a number above zero and of sane size. `0` would divide by zero in
+/// the layout, and `inf` parses as a number too.
+fn image_size(text: &str) -> Option<f32> {
+    let value: f32 = text.trim().trim_end_matches("px").parse().ok()?;
+    (value.is_finite() && value > 0.0).then(|| value.min(100_000.0))
 }
 
 fn strip_front_matter_fences(raw: &str) -> String {
@@ -1417,6 +1421,51 @@ mod tests {
         assert_eq!(image.src, "diagram.png");
         assert_eq!(image.alt, "diagram.png");
         assert_eq!((image.width, image.height), (Some(300.0), Some(200.0)));
+    }
+
+    #[test]
+    fn image_sizes_are_numbers_above_zero() {
+        let sizes = |source: &str| {
+            let doc = Document::parse(source);
+            let Some(Block::Paragraph { inlines, .. }) = doc.blocks.first() else {
+                panic!("{:?}", doc.blocks);
+            };
+            let Inline::Image(image) = &inlines[0] else {
+                panic!("{inlines:?}");
+            };
+            (image.width, image.height)
+        };
+        assert_eq!(sizes("![[a.png|0x0]]\n"), (None, None));
+        assert_eq!(
+            sizes("<img src=\"a.png\" width=\"inf\" height=\"-5\">\n"),
+            (None, None)
+        );
+        assert_eq!(
+            sizes("<img src=\"a.png\" width=\"120px\">\n"),
+            (Some(120.0), None)
+        );
+        assert_eq!(
+            sizes("![[a.png|1e9]]\n"),
+            (None, None),
+            "not a size of digits"
+        );
+        assert_eq!(
+            sizes("<img src=\"a.png\" width=\"1e9\">\n"),
+            (Some(100_000.0), None)
+        );
+    }
+
+    #[test]
+    fn empty_embeds_stay_text() {
+        for source in ["![[]]\n", "![[|300]]\n", "![[ ]]\n"] {
+            let doc = Document::parse(source);
+            assert!(
+                matches!(&doc.blocks[0], Block::Paragraph { inlines, .. }
+                    if matches!(&inlines[..], [Inline::Text(rich)] if rich.text == source.trim())),
+                "{source}: {:?}",
+                doc.blocks
+            );
+        }
     }
 
     #[test]
