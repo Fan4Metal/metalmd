@@ -39,6 +39,8 @@ const TOP_PADDING: f32 = 20.0;
 const BOTTOM_PADDING: f32 = 120.0;
 /// Time per frame spent measuring blocks that are not on screen.
 const MEASURE_BUDGET: Duration = Duration::from_millis(4);
+/// How long a jump is re-applied at most while heights above it change.
+const SETTLE_TIME: Duration = Duration::from_secs(1);
 
 /// Something the user asked for by clicking in the document.
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +69,10 @@ pub struct ViewState {
     /// above the target are still being measured.
     settle: u8,
     settle_target: Option<(usize, f32)>,
+    /// When the jump being settled was made: settling ends after
+    /// [`SETTLE_TIME`] too, as frames come only with input once the view is
+    /// still.
+    settle_since: Option<Instant>,
     /// Scroll by this many points next frame (keyboard scrolling).
     pub scroll_delta: f32,
     pub viewport_top: f32,
@@ -194,9 +200,20 @@ pub fn show_document(
         .id_salt(salt)
         .auto_shrink([false, false]);
 
+    // Any scrolling by the reader ends the settling of a jump: the wheel,
+    // the keys, or a drag (of the scroll bar); so does time.
+    let reader_scrolls = view.scroll_delta != 0.0
+        || ui.input(|i| i.smooth_scroll_delta.y != 0.0 || i.pointer.is_decidedly_dragging());
+    let settled = view.settle_since.is_some_and(|t| t.elapsed() > SETTLE_TIME);
+    if view.settle_target.is_some() && (reader_scrolls || settled) {
+        view.settle_target = None;
+        view.settle = 0;
+        view.settle_since = None;
+    }
     if let Some((block, delta)) = view.jump.take() {
         view.settle = 8;
         view.settle_target = Some((block, delta));
+        view.settle_since = Some(Instant::now());
     }
     if let Some((block, delta)) = view.settle_target {
         let target = offsets[block.min(count)] - delta;
@@ -214,11 +231,6 @@ pub fn show_document(
         {
             area = area.vertical_scroll_offset((state.offset.y + delta).max(0.0));
         }
-    }
-    // Any user scrolling cancels the settling of a jump.
-    if view.settle_target.is_some() && ui.input(|i| i.smooth_scroll_delta.y != 0.0) {
-        view.settle_target = None;
-        view.settle = 0;
     }
 
     let scroll_delta = std::mem::take(&mut view.scroll_delta);
