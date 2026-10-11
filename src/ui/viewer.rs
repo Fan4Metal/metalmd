@@ -1187,6 +1187,16 @@ fn inline_picture(
         }
         State::Failed(_) => return None,
     };
+    // A formula wider than the text is made smaller to fit, as a line
+    // cannot be scrolled and its end would be cut off at the edge; but not
+    // below 60%, where it could not be read (copying it still gives it all).
+    let available = ui.available_width();
+    let width = picture.size(em).x;
+    let em = if available > 0.0 && width > available {
+        em * (available / width).max(0.6)
+    } else {
+        em
+    };
     // The space is as wide as the picture: its font size makes it so (a
     // space has no outline, so no size of it takes room in the font atlas).
     let space_per_point =
