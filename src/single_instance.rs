@@ -114,21 +114,30 @@ impl Server {
         Some(Server { listener })
     }
 
-    /// Serves hand-offs on a background thread.
-    pub fn spawn(self, on_paths: impl Fn(Vec<PathBuf>) + Send + 'static) {
+    /// Serves hand-offs on a background thread. Each connection is read on
+    /// a thread of its own: a client that connects and never finishes its
+    /// message (pipe reads have no timeout) would otherwise block every
+    /// later launch.
+    pub fn spawn(self, on_paths: impl Fn(Vec<PathBuf>) + Send + Sync + 'static) {
+        let on_paths = std::sync::Arc::new(on_paths);
         std::thread::Builder::new()
             .name("single-instance".into())
             .spawn(move || {
                 for connection in self.listener.incoming().flatten() {
-                    let mut paths = Vec::new();
-                    for line in BufReader::new(connection).lines() {
-                        let Ok(line) = line else { break };
-                        if line.is_empty() {
-                            break;
-                        }
-                        paths.push(PathBuf::from(line));
-                    }
-                    on_paths(paths);
+                    let on_paths = std::sync::Arc::clone(&on_paths);
+                    let _ = std::thread::Builder::new()
+                        .name("hand-off".into())
+                        .spawn(move || {
+                            let mut paths = Vec::new();
+                            for line in BufReader::new(connection).lines() {
+                                let Ok(line) = line else { break };
+                                if line.is_empty() {
+                                    break;
+                                }
+                                paths.push(PathBuf::from(line));
+                            }
+                            on_paths(paths);
+                        });
                 }
             })
             .expect("spawn single-instance thread");
