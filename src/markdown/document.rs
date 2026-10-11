@@ -402,23 +402,8 @@ impl Builder {
                     .next()
                     .unwrap_or("")
                     .to_owned();
-                let mut code = code_block.literal.clone();
-                if code.ends_with('\n') {
-                    code.pop();
-                    if code.ends_with('\r') {
-                        code.pop();
-                    }
-                }
-                let id = self.alloc_id();
-                self.add_search(id, &code);
-                self.has_code = true;
-                let key = super::highlight::code_key(&lang, &code);
-                out.push(Block::Code {
-                    id,
-                    key,
-                    lang,
-                    code,
-                });
+                let code = code_block.literal.clone();
+                self.push_code(lang, code, out);
             }
             NodeValue::HtmlBlock(html_block) => {
                 let literal = html_block.literal.clone();
@@ -554,12 +539,75 @@ impl Builder {
     }
 
     /// An HTML block: paragraphs, headings and images; unknown tags dropped.
+    /// A code block of `code`, without its last line end.
+    fn push_code(&mut self, lang: String, mut code: String, out: &mut Vec<Block>) {
+        if code.ends_with('\n') {
+            code.pop();
+            if code.ends_with('\r') {
+                code.pop();
+            }
+        }
+        let id = self.alloc_id();
+        self.add_search(id, &code);
+        self.has_code = true;
+        let key = super::highlight::code_key(&lang, &code);
+        out.push(Block::Code {
+            id,
+            key,
+            lang,
+            code,
+        });
+    }
+
+    /// The code of a `<pre>`: a line end right after `<pre>` is not part
+    /// of it, as in a browser.
+    fn push_pre(&mut self, (lang, code): (String, String), out: &mut Vec<Block>) {
+        let code = match code
+            .strip_prefix("\r\n")
+            .or_else(|| code.strip_prefix('\n'))
+        {
+            Some(rest) => rest.to_owned(),
+            None => code,
+        };
+        self.push_code(lang, code, out);
+    }
+
     fn html_block(&mut self, literal: &str, out: &mut Vec<Block>) {
         let mut ctx = InlineCtx::new(self.base_style);
         ctx.collapse_whitespace = true;
         let mut heading: Option<u8> = None;
+        // Inside `<pre>`: its language and its text so far, as written.
+        let mut pre: Option<(String, String)> = None;
         for token in html::tokenize(literal) {
+            if let Some((lang, code)) = pre.as_mut() {
+                match &token {
+                    Token::Close { name } if name == "pre" => {
+                        if let Some(pre) = pre.take() {
+                            self.push_pre(pre, out);
+                        }
+                    }
+                    Token::Text(text) => code.push_str(&html::decode_entities(text)),
+                    // Markup inside (`<code>`, `<b>`, `<span>`) is dropped.
+                    Token::Open { name, attrs, .. } => {
+                        if name == "br" {
+                            code.push('\n');
+                        } else if lang.is_empty() {
+                            *lang = html_code_language(attrs);
+                        }
+                    }
+                    Token::Close { .. } => {}
+                }
+                continue;
+            }
             match &token {
+                Token::Open {
+                    name,
+                    attrs,
+                    self_closing: false,
+                } if name == "pre" => {
+                    self.flush_html_paragraph(&mut ctx, heading.take(), out);
+                    pre = Some((html_code_language(attrs), String::new()));
+                }
                 Token::Open {
                     name,
                     attrs,
@@ -596,7 +644,16 @@ impl Builder {
                 _ => ctx.html_token(self, &token),
             }
         }
+        // An unclosed `<pre>` runs to the end of the block.
+        if let Some(pre) = pre {
+            self.push_pre(pre, out);
+        }
         self.flush_html_paragraph(&mut ctx, heading, out);
+        // A paragraph or heading left open ends with its block, as a
+        // browser closes it before the next one: an unclosed
+        // `<p align="center">` must not centre the rest of the document.
+        // Containers (`<div>`, `<center>`) span the Markdown that follows.
+        self.html_align.retain(|(name, _)| is_html_container(name));
     }
 
     fn flush_html_paragraph(
@@ -687,6 +744,49 @@ fn is_html_block_tag(name: &str) -> bool {
             | "figcaption"
             | "hr"
     )
+}
+
+/// A block tag that can hold other blocks, so its alignment carries over
+/// to the Markdown blocks until its closing tag.
+fn is_html_container(name: &str) -> bool {
+    matches!(
+        name,
+        "div"
+            | "center"
+            | "details"
+            | "section"
+            | "article"
+            | "header"
+            | "footer"
+            | "nav"
+            | "blockquote"
+            | "figure"
+            | "table"
+            | "thead"
+            | "tbody"
+            | "ul"
+            | "ol"
+            | "dl"
+    )
+}
+
+/// The language of `<pre>` or `<code>` from its attributes: `lang="rust"`,
+/// or `class="language-rust"` (`lang-rust`, `highlight-source-rust`) as
+/// highlighters and GitHub write it. Empty if none.
+fn html_code_language(attrs: &str) -> String {
+    if let Some(lang) = html::attr(attrs, "lang") {
+        return lang.trim().to_owned();
+    }
+    let class = html::attr(attrs, "class").unwrap_or_default();
+    class
+        .split_whitespace()
+        .find_map(|c| {
+            c.strip_prefix("language-")
+                .or_else(|| c.strip_prefix("lang-"))
+                .or_else(|| c.strip_prefix("highlight-source-"))
+        })
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn html_heading_level(name: &str) -> Option<u8> {
@@ -1381,6 +1481,40 @@ mod tests {
             }
         ));
         assert_eq!(doc.blocks.len(), 2, "{:?}", doc.blocks);
+    }
+
+    #[test]
+    fn an_unclosed_paragraph_does_not_align_what_follows() {
+        let doc =
+            Document::parse("<p align=\"center\">\n  <img src=\"logo.png\">\n\n# Title\n\nText\n");
+        let aligns: Vec<Align> = doc
+            .blocks
+            .iter()
+            .map(|b| match b {
+                Block::Paragraph { align, .. } | Block::Heading { align, .. } => *align,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(aligns, [Align::Center, Align::Left, Align::Left]);
+    }
+
+    #[test]
+    fn pre_becomes_a_code_block_kept_as_written() {
+        let doc = Document::parse(
+            "<pre lang=\"rust\">\nfn main() {\n    let x = 1 &lt; 2;\n\n    <b>y</b>();\n}\n</pre>\n\nAfter\n",
+        );
+        let Block::Code { lang, code, .. } = &doc.blocks[0] else {
+            panic!("{:?}", doc.blocks[0]);
+        };
+        assert_eq!(lang, "rust");
+        assert_eq!(code, "fn main() {\n    let x = 1 < 2;\n\n    y();\n}");
+        assert!(matches!(&doc.blocks[1], Block::Paragraph { .. }));
+
+        let doc = Document::parse("<pre><code class=\"language-py\">a  =  1\nb = 2</code></pre>\n");
+        let Block::Code { lang, code, .. } = &doc.blocks[0] else {
+            panic!("{:?}", doc.blocks[0]);
+        };
+        assert_eq!((lang.as_str(), code.as_str()), ("py", "a  =  1\nb = 2"));
     }
 
     #[test]
