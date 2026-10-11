@@ -591,105 +591,225 @@ fn draw_list(
     }
 }
 
+/// Horizontal space between table columns.
+const CELL_GAP: f32 = 20.0;
+/// Vertical space between table rows.
+const ROW_GAP: f32 = 8.0;
+const CELL_SIZE: f32 = BODY_SIZE * 0.95;
+
+/// A table laid out as a browser does (`table-layout: auto`): each column
+/// as wide as its widest cell when they all fit, else at least as wide as
+/// its longest word, sharing the rest in proportion to how much each needs
+/// to stop wrapping. Cells are centred vertically in their row, as on GitHub.
 fn draw_table(ui: &mut Ui, table: &Table, rc: &mut RenderCtx<'_>, salt: u64) {
     let border = rc.palette.border;
     let columns = table
         .header
         .len()
         .max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
-    // Natural column widths from the previous frame, used to center and
-    // right-align cells without letting them stretch their column.
-    let widths_id = Id::new(("table-widths", salt));
-    let previous: Vec<f32> = ui.data(|d| d.get_temp(widths_id)).unwrap_or_default();
-    let mut measured = vec![0.0f32; columns];
+    let rows: Vec<&Vec<Vec<Inline>>> = std::iter::once(&table.header)
+        .chain(table.rows.iter())
+        .collect();
+    let mut min = vec![0.0f32; columns];
+    let mut max = vec![0.0f32; columns];
+    for row in &rows {
+        for (c, cell) in row.iter().enumerate() {
+            let (lo, hi) = cell_extent(ui, cell, rc, CELL_SIZE);
+            min[c] = min[c].max(lo);
+            max[c] = max[c].max(hi);
+        }
+    }
+    // Cell heights from the previous frame, to centre cells in their row.
+    let heights_id = Id::new(("table-cells", salt));
+    let previous: Vec<f32> = ui.data(|d| d.get_temp(heights_id)).unwrap_or_default();
+    let mut heights = vec![0.0f32; rows.len() * columns];
     Frame::new()
         .stroke(Stroke::new(1.0, border))
         .corner_radius(CornerRadius::same(4))
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
+            let gaps = CELL_GAP * columns.saturating_sub(1) as f32;
+            let widths = column_widths(&min, &max, ui.available_width() - gaps);
+            let total = widths.iter().sum::<f32>() + gaps;
             ScrollArea::horizontal()
                 .id_salt(("table-scroll", salt))
                 .auto_shrink([true, true])
                 .show(ui, |ui| {
-                    egui::Grid::new(("table", salt))
-                        .num_columns(columns)
-                        .striped(true)
-                        .spacing(vec2(20.0, 8.0))
-                        .min_col_width(24.0)
-                        .max_col_width(420.0)
-                        .show(ui, |ui| {
-                            let rows = std::iter::once(&table.header).chain(table.rows.iter());
-                            for (r, row) in rows.enumerate() {
-                                for (c, column_max) in measured.iter_mut().enumerate() {
-                                    let cell = row.get(c).map_or(&[][..], Vec::as_slice);
-                                    let align = table.aligns.get(c).copied().unwrap_or_default();
-                                    let cell_salt = salt.wrapping_add((r * 1000 + c) as u64 + 1);
-                                    let width = draw_cell(
-                                        ui,
-                                        cell,
-                                        align,
-                                        previous.get(c).copied(),
-                                        rc,
-                                        cell_salt,
-                                    );
-                                    *column_max = column_max.max(width);
-                                }
-                                ui.end_row();
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    let stripe = ui.visuals().faint_bg_color;
+                    for (r, row) in rows.iter().enumerate() {
+                        if r > 0 {
+                            ui.add_space(ROW_GAP);
+                        }
+                        let top = ui.cursor().min;
+                        let background = (r % 2 == 1).then(|| ui.painter().add(egui::Shape::Noop));
+                        let cells = r * columns..(r + 1) * columns;
+                        let row_height = previous
+                            .get(cells.clone())
+                            .map_or(0.0, |h| h.iter().copied().fold(0.0, f32::max));
+                        let mut x = top.x;
+                        let mut bottom = top.y;
+                        for (c, &width) in widths.iter().enumerate() {
+                            let index = r * columns + c;
+                            let cell = row.get(c).map_or(&[][..], Vec::as_slice);
+                            let pad = previous
+                                .get(index)
+                                .map_or(0.0, |h| ((row_height - h) / 2.0).max(0.0).floor());
+                            let rect =
+                                Rect::from_min_size(pos2(x, top.y + pad), vec2(width, 1.0e5));
+                            let mut child = ui.new_child(
+                                UiBuilder::new()
+                                    .id_salt(("cell", r, c))
+                                    .max_rect(rect)
+                                    .layout(Layout::top_down(egui::Align::Min)),
+                            );
+                            child.set_width(width);
+                            if !cell.is_empty() {
+                                let align = table.aligns.get(c).copied().unwrap_or_default();
+                                let cell_salt = salt.wrapping_add((r * 1000 + c) as u64 + 1);
+                                draw_inlines(
+                                    &mut child,
+                                    cell,
+                                    rc,
+                                    CELL_SIZE,
+                                    Style::NONE,
+                                    align,
+                                    cell_salt,
+                                    false,
+                                );
                             }
-                        });
+                            let used = child.min_rect();
+                            heights[index] = used.height();
+                            bottom = bottom.max(used.max.y);
+                            x += width + CELL_GAP;
+                        }
+                        let row_rect = Rect::from_min_max(top, pos2(top.x + total, bottom));
+                        if let Some(background) = background {
+                            let fill = row_rect.expand2(vec2(2.0, ROW_GAP / 2.0));
+                            ui.painter()
+                                .set(background, egui::Shape::rect_filled(fill, 2.0, stripe));
+                        }
+                        ui.advance_cursor_after_rect(row_rect);
+                    }
                 });
         });
-    if measured != previous {
-        ui.data_mut(|d| d.insert_temp(widths_id, measured));
+    let changed = heights.len() != previous.len()
+        || heights
+            .iter()
+            .zip(&previous)
+            .any(|(a, b)| (a - b).abs() > 0.5);
+    if changed {
+        ui.data_mut(|d| d.insert_temp(heights_id, heights));
         ui.ctx().request_repaint();
     }
 }
 
-/// Draws one table cell and returns its natural (unpadded) width.
-fn draw_cell(
-    ui: &mut Ui,
-    cell: &[Inline],
-    align: Align,
-    column_width: Option<f32>,
-    rc: &mut RenderCtx<'_>,
-    salt: u64,
-) -> f32 {
-    if cell.is_empty() {
-        ui.label("");
-        return 0.0;
+/// Column widths for `available` points from the columns' narrowest
+/// (longest word) and natural (unwrapped) widths.
+fn column_widths(min: &[f32], max: &[f32], available: f32) -> Vec<f32> {
+    let min_total: f32 = min.iter().sum();
+    let max_total: f32 = max.iter().sum();
+    if max_total <= available {
+        return max.to_vec();
     }
-    let width_id = Id::new(("cell-width", salt));
-    let natural: Option<f32> = ui.data(|d| d.get_temp(width_id));
-    let pad = match (align, column_width, natural) {
-        (Align::Center, Some(column), Some(width)) => ((column - width) / 2.0).max(0.0).floor(),
-        (Align::Right, Some(column), Some(width)) => (column - width).max(0.0).floor(),
-        _ => 0.0,
+    if min_total >= available || max_total <= min_total {
+        return min.to_vec();
+    }
+    let share = (available - min_total) / (max_total - min_total);
+    min.iter()
+        .zip(max)
+        .map(|(lo, hi)| (lo + (hi - lo) * share).floor())
+        .collect()
+}
+
+/// The narrowest width a cell can wrap to (its longest word or widest
+/// image) and its width unwrapped.
+fn cell_extent(ui: &Ui, cell: &[Inline], rc: &mut RenderCtx<'_>, size: f32) -> (f32, f32) {
+    let mut min = 0.0f32;
+    let mut max = 0.0f32;
+    let mut line = 0.0f32;
+    for inline in cell {
+        match inline {
+            Inline::Text(rich) => {
+                let mut job = rich_job(rich, rc, ui, size, Style::NONE).job;
+                job.wrap.max_width = f32::INFINITY;
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
+                min = min.max(longest_word(&galley));
+                for (i, row) in galley.rows.iter().enumerate() {
+                    if i > 0 {
+                        max = max.max(line);
+                        line = 0.0;
+                    }
+                    line += row.rect().width();
+                }
+            }
+            Inline::Image(image) => {
+                let width = image_width(ui, image, rc);
+                min = min.max(width);
+                line += width;
+            }
+        }
+    }
+    // Room for rounding, so that text exactly as wide as its column does
+    // not wrap.
+    (min.ceil() + 1.0, max.max(line).ceil() + 1.0)
+}
+
+/// The width of the widest run of glyphs that a line cannot break inside.
+fn longest_word(galley: &Galley) -> f32 {
+    let mut longest = 0.0f32;
+    for row in &galley.rows {
+        let mut start: Option<f32> = None;
+        for glyph in &row.glyphs {
+            if glyph.chr == ' ' || glyph.chr == '\t' {
+                start = None;
+                continue;
+            }
+            let left = *start.get_or_insert(glyph.pos.x);
+            longest = longest.max(glyph.pos.x + glyph.advance_width - left);
+            // A line may break after any CJK character.
+            if matches!(glyph.chr, '\u{3000}'..='\u{9fff}' | '\u{ac00}'..='\u{d7af}' | '\u{f900}'..='\u{faff}' | '\u{ff00}'..='\u{ffef}')
+            {
+                start = None;
+            }
+        }
+    }
+    longest
+}
+
+/// The width [`draw_image`] gives `image` when nothing limits it.
+fn image_width(ui: &Ui, image: &ImageRef, rc: &RenderCtx<'_>) -> f32 {
+    if let Some(width) = image.width {
+        return width;
+    }
+    let alt_width = || {
+        let alt = if image.alt.is_empty() {
+            "image"
+        } else {
+            image.alt.as_str()
+        };
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        ui.fonts_mut(|f| f.layout_no_wrap(format!("[{alt}]"), font, Color32::PLACEHOLDER))
+            .size()
+            .x
     };
-    let response = ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.add_space(pad);
-        ui.vertical(|ui| {
-            draw_inlines(
-                ui,
-                cell,
-                rc,
-                BODY_SIZE * 0.95,
-                Style::NONE,
-                Align::Left,
-                salt,
-                false,
-            )
-        })
-        .response
-        .rect
-        .width()
-    });
-    let width = response.inner;
-    if natural.is_none_or(|n| (n - width).abs() > 0.5) {
-        ui.data_mut(|d| d.insert_temp(width_id, width));
-        ui.ctx().request_repaint();
+    let Some(uri) = image_uri(&image.src, rc.base_dir) else {
+        return alt_width();
+    };
+    let uri = super::animation::frame_uri(ui.ctx(), &uri).unwrap_or(uri);
+    // The texture at its original size, which `draw_image` asks for too
+    // when no size is given: the request does not depend on the room.
+    match egui::Image::new(uri)
+        .fit_to_original_size(1.0)
+        .load_for_size(ui.ctx(), Vec2::INFINITY)
+    {
+        Ok(egui::load::TexturePoll::Ready { texture }) => match image.height {
+            Some(height) if texture.size.y > 0.0 => height * texture.size.x / texture.size.y,
+            _ => texture.size.x,
+        },
+        Ok(egui::load::TexturePoll::Pending { size }) => size.map_or(16.0, |s| s.x),
+        Err(_) => alt_width(),
     }
-    width
 }
 
 /// Draws a run of text and images. `extra` is added to every span's style.
