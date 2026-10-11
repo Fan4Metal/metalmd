@@ -986,7 +986,24 @@ impl InlineCtx {
                 attrs,
                 self_closing,
             } => match name.as_str() {
-                "br" => self.push_text("\n", Style::NONE),
+                "br" => {
+                    // Not whitespace to collapse: in an HTML block it would
+                    // become a space.
+                    let collapse = std::mem::replace(&mut self.collapse_whitespace, false);
+                    // Nor is a space before it, which would be drawn at the
+                    // end of the line and shift a centred one.
+                    if collapse && self.cur.text.ends_with(' ') {
+                        self.cur.text.pop();
+                        if let Some(last) = self.cur.spans.last_mut() {
+                            last.range.end = last.range.end.min(self.cur.text.len());
+                            if last.range.is_empty() {
+                                self.cur.spans.pop();
+                            }
+                        }
+                    }
+                    self.push_text("\n", Style::NONE);
+                    self.collapse_whitespace = collapse;
+                }
                 "img" => {
                     let Some(src) = html::attr(attrs, "src") else {
                         return;
@@ -1358,6 +1375,22 @@ mod tests {
             }
         ));
         assert_eq!(doc.blocks.len(), 2, "{:?}", doc.blocks);
+    }
+
+    #[test]
+    fn br_breaks_the_line_in_html_blocks() {
+        for source in [
+            "<p align=\"center\">line one<br>line two</p>\n",
+            "<p align=\"center\">line one<br/>\n  line two</p>\n",
+            "<div>\nline one <br> line two\n</div>\n",
+        ] {
+            let doc = Document::parse(source);
+            assert_eq!(
+                first_rich(&doc.blocks[0]).text,
+                "line one\nline two",
+                "{source}"
+            );
+        }
     }
 
     #[test]
