@@ -499,10 +499,33 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
 }
 
 /// A block with a colored bar on its left (quotes, alerts).
+/// Quotes and lists indented at most: deeper ones are drawn at the indent
+/// of the last, so the text keeps room (32 levels would be wider than the
+/// page, the parser's limit).
+const MAX_INDENTS: u32 = 8;
+
+/// Quotes and lists open around what is being drawn.
+fn indents(ui: &Ui) -> u32 {
+    ui.data(|d| d.get_temp(Id::new("indents"))).unwrap_or(0)
+}
+
+/// Draws `add` one quote or list deeper.
+fn indented<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let depth = indents(ui);
+    ui.data_mut(|d| d.insert_temp(Id::new("indents"), depth + 1));
+    let result = add(ui);
+    ui.data_mut(|d| d.insert_temp(Id::new("indents"), depth));
+    result
+}
+
 fn draw_barred(ui: &mut Ui, color: Color32, add: impl FnOnce(&mut Ui)) {
+    if indents(ui) >= MAX_INDENTS {
+        ui.vertical(|ui| indented(ui, add));
+        return;
+    }
     let response = ui.horizontal_top(|ui| {
         ui.add_space(4.0 + BODY_SIZE * 0.9);
-        ui.vertical(add);
+        ui.vertical(|ui| indented(ui, add));
     });
     let rect = response.response.rect;
     ui.painter().rect_filled(
@@ -531,13 +554,25 @@ fn draw_list(
         BODY_SIZE * 1.5
     };
     let line = BODY_SIZE * LINE_HEIGHT;
+    // Too deep to indent again: the marker goes where the last level's
+    // markers are, left of the text, which they leave empty below their
+    // first line.
+    let flat = indents(ui) >= MAX_INDENTS;
     for (i, item) in items.iter().enumerate() {
         if i > 0 {
             ui.add_space(if tight { 2.0 } else { GAP * 0.6 });
         }
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            let (marker, _) = ui.allocate_exact_size(vec2(marker_width, line), Sense::hover());
+            let marker = if flat {
+                Rect::from_min_size(
+                    ui.cursor().min - vec2(marker_width, 0.0),
+                    vec2(marker_width, line),
+                )
+            } else {
+                ui.allocate_exact_size(vec2(marker_width, line), Sense::hover())
+                    .0
+            };
             let painter = ui.painter();
             let text_color = ui.visuals().text_color();
             let center_y = marker.center().y;
@@ -591,13 +626,15 @@ fn draw_list(
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.data_mut(|d| d.insert_temp(Id::new("list-depth"), depth + 1));
                 let gap = if tight { 2.0 } else { GAP * 0.6 };
-                draw_blocks(
-                    ui,
-                    &item.blocks,
-                    rc,
-                    gap,
-                    salt.wrapping_mul(17).wrapping_add(i as u64),
-                );
+                indented(ui, |ui| {
+                    draw_blocks(
+                        ui,
+                        &item.blocks,
+                        rc,
+                        gap,
+                        salt.wrapping_mul(17).wrapping_add(i as u64),
+                    )
+                });
                 ui.data_mut(|d| d.insert_temp(Id::new("list-depth"), depth));
             });
         });
