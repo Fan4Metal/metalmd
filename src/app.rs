@@ -9,6 +9,7 @@ use crate::settings::{Settings, ThemeSetting, TocSide, same_path};
 use crate::single_instance::Server;
 use crate::style::{self, BODY_SIZE, FontChoice, Palette};
 use crate::ui::about::About;
+use crate::ui::confirm::{ConfirmOpen, LinkTarget};
 use crate::ui::diagram::DiagramRenderer;
 use crate::ui::emoji::EmojiRenderer;
 use crate::ui::find::FindState;
@@ -193,6 +194,8 @@ pub struct App {
     bench: Option<Bench>,
     title: String,
     about: About,
+    /// Asks before a link starts a program or reaches another computer.
+    confirm: ConfirmOpen,
     start_icon: Option<egui::TextureHandle>,
     /// The window, for its caption (see `follow_theme`).
     hwnd: Option<isize>,
@@ -301,6 +304,7 @@ impl App {
             bench,
             title: String::new(),
             about: About::default(),
+            confirm: ConfirmOpen::default(),
             start_icon: None,
             hwnd,
             shown_theme: None,
@@ -574,8 +578,10 @@ impl App {
             }
             return;
         }
+        let file_url = file_url_path(&target);
+        let target = file_url.unwrap_or(target);
         if has_url_scheme(&target) {
-            let _ = open::that_detached(&target);
+            self.open_link_target(LinkTarget::Url(target));
             return;
         }
         // A path relative to the current document.
@@ -597,11 +603,39 @@ impl App {
         } else {
             return;
         };
-        if is_markdown_path(&decoded) {
-            self.open_path(normalize_path(&resolved), fragment);
-            let _ = ctx;
-        } else if resolved.exists() {
-            let _ = open::that_detached(&resolved);
+        let _ = ctx;
+        self.open_link_target(if is_markdown_path(&decoded) {
+            LinkTarget::Markdown(resolved, fragment)
+        } else {
+            LinkTarget::File(resolved)
+        });
+    }
+
+    /// Opens a link's target, or asks first if it may run something or
+    /// reach another computer.
+    fn open_link_target(&mut self, target: LinkTarget) {
+        let document = self.tabs.get(self.active).map(|t| t.path.as_path());
+        match crate::ui::confirm::risk(&target, document) {
+            Some(risk) => self.confirm.ask(target, risk),
+            None => self.open_target(target),
+        }
+    }
+
+    fn open_target(&mut self, target: LinkTarget) {
+        match target {
+            LinkTarget::Markdown(path, fragment) => self.open_path(normalize_path(&path), fragment),
+            // Off the UI thread: the shell can take a while, and a path on
+            // an unreachable computer blocks for the network's timeout.
+            LinkTarget::Url(url) => {
+                std::thread::spawn(move || open::that_detached(&url));
+            }
+            LinkTarget::File(path) => {
+                std::thread::spawn(move || {
+                    if path.exists() {
+                        let _ = open::that_detached(&path);
+                    }
+                });
+            }
         }
     }
 
@@ -623,8 +657,8 @@ impl App {
         if consume(plain(Key::F1)) {
             self.about.toggle();
         }
-        // The dialog takes the keyboard (Enter and Esc close it).
-        if self.about.open {
+        // A dialog takes the keyboard (Enter and Esc close it).
+        if self.about.open || self.confirm.is_open() {
             return;
         }
         if consume(command(Key::F)) {
@@ -1121,6 +1155,9 @@ impl eframe::App for App {
             });
         let lang = self.settings.language;
         self.about.show(&ctx, &mut self.settings.language);
+        if let Some(target) = self.confirm.show(&ctx) {
+            self.open_target(target);
+        }
         if self.settings.language != lang {
             self.settings_dirty = true;
         }
@@ -1210,6 +1247,22 @@ pub fn resolve_anchor(doc: &Document, anchor: &str) -> Option<usize> {
         .copied()
 }
 
+/// The path a `file:` URL names (`file:///C:/a.md` → `C:/a.md`,
+/// `file://host/share/a.md` → `//host/share/a.md`), percent-decoded.
+fn file_url_path(target: &str) -> Option<String> {
+    let scheme = target.get(..5)?;
+    if !scheme.eq_ignore_ascii_case("file:") {
+        return None;
+    }
+    let rest = &target[5..];
+    let path = match rest.strip_prefix("///") {
+        Some(local) => local.to_owned(),
+        None if rest.starts_with("//") => rest.to_owned(),
+        None => rest.trim_start_matches('/').to_owned(),
+    };
+    Some(percent_decode(&path))
+}
+
 /// `https:`, `mailto:` and the like, but not a Windows drive letter.
 fn has_url_scheme(target: &str) -> bool {
     match target.split_once(':') {
@@ -1230,6 +1283,21 @@ fn has_url_scheme(target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_urls_become_paths() {
+        assert_eq!(
+            file_url_path("file:///C:/My%20Docs/a.md").as_deref(),
+            Some("C:/My Docs/a.md")
+        );
+        assert_eq!(
+            file_url_path("FILE://host/share/a.exe").as_deref(),
+            Some("//host/share/a.exe")
+        );
+        assert_eq!(file_url_path("file:/C:/a.png").as_deref(), Some("C:/a.png"));
+        assert_eq!(file_url_path("https://example.com"), None);
+        assert_eq!(file_url_path("fil"), None);
+    }
 
     #[test]
     fn url_schemes_are_told_apart_from_drive_letters() {

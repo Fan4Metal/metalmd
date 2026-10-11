@@ -2,6 +2,7 @@
 
 pub mod about;
 pub mod animation;
+pub mod confirm;
 pub mod copy;
 pub mod diagram;
 pub mod emoji;
