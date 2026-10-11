@@ -27,6 +27,7 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 - **Obsidian and Markpad syntax**: `[[Note#Heading|alias]]` wikilinks, `![[image.png|300x200]]` embeds, `^block-id` anchors, `==highlight==`, `++insert++`, `^[inline footnotes]` and definition lists. A single newline is a line break (see [Supported Markdown](#supported-markdown)).
 - **Code highlighting** for about 200 languages, in colours that follow the light or dark theme.
 - **Formulas**: `$…$` and `$$…$$` are typeset as KaTeX does it, by [RaTeX](https://github.com/erweixin/RaTeX), a port of KaTeX to Rust.
+- **Colour emoji**, drawn with the system emoji font (Segoe UI Emoji).
 - **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
 - **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` and other tags common in READMEs.
 - **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
@@ -50,7 +51,7 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 | Math | `$E = mc^2$` inline, `$$ … $$` on its own lines, LaTeX as [KaTeX](https://katex.org/docs/supported) supports it |
 | Diagrams | ```` ```mermaid ```` blocks: the diagram types of [mermaid-svg](https://github.com/xmiksay/mermaid) |
 | Code blocks | highlighted with [syntect](https://github.com/trishume/syntect) and the grammars of [two-face](https://github.com/CosmicHorrorDev/two-face) |
-| Images | PNG, JPEG, GIF, WebP, SVG and BMP, local or over http(s) |
+| Images | PNG, JPEG, GIF, WebP, SVG, BMP and ICO, local or over http(s); animated GIF, WebP and APNG play; SVG badges keep their text |
 | HTML | `<img>`, `<a>`, `<br>`, `<p align="center">`, `<b>`, `<i>`, `<kbd>`, `<sub>`, `<sup>`, `<mark>`, `<details>` (always open) |
 
 **Not supported**:
@@ -83,8 +84,11 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | `F5`, `Ctrl+R` | Reload the file |
 | `Alt+←`, mouse Back button | Go back after following a link |
 | `Ctrl+=` / `Ctrl+−` / `Ctrl+0` | Zoom in, out, reset |
-| `PageUp`, `PageDown`, `Space`, `Home`, `End`, arrows | Scroll |
+| `PageUp`, `PageDown`, `Space` / `Shift+Space`, arrows | Scroll |
+| `Home`, `End` (`Ctrl+Home`, `Ctrl+End`) | Go to the start or the end |
 | `F1` | About |
+
+With the mouse: a code block shows a Copy button under the pointer, and the context menu of a `$$` formula or a diagram copies its source ("Copy TeX", "Copy Mermaid source"); the zoom shown next to the toolbar buttons resets it with a click; the contents button or panel chooses the side of the table of contents with a right click.
 
 ## Usage
 
