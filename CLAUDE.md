@@ -38,7 +38,7 @@ Release builds use `windows_subsystem = "windows"` (no console); debug builds ke
 
 ### Startup pipeline (`main.rs` → `app.rs`)
 
-1. `main` parses args, normalizes paths, and tries `single_instance::hand_off` (local socket / named pipe). If another instance accepts, the process exits.
+1. `main` parses args, normalizes paths, and tries `single_instance::hand_off` (local socket / named pipe named after the user, the Windows session and a hash of the exe's path, so each copy of the exe has its own window, as in qview). If another instance accepts, the process exits.
 2. Before creating the window, `main` spawns one loader thread per file (`app::spawn_load`: read → `fs_text::decode_text` → `Document::parse`). Results come back as `AppMsg::Loaded` over an mpsc channel.
 3. eframe starts with the **glow** renderer. wgpu was measured slower (DX12 ~240 ms, Vulkan ~290 ms vs ~130 ms for glow). `eframe` uses `default-features = false` so wgpu is not linked; don't re-enable default features.
 4. On the first frame, `App::ui` blocks briefly (`wait_for_first_document`) so the window appears with the document rather than empty. Fonts are set in `App::new` but only take effect at the next frame start, which is why `FontChoice::measure_ascents` runs in frame 1.

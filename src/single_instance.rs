@@ -1,16 +1,36 @@
-//! One window per user: a second launch hands its files to the first one.
+//! One window per copy of MetalMD in a user's session: a second launch hands
+//! its files to the first one.
 //!
 //! The first process listens on a local socket (a named pipe on Windows).
 //! A later process connects, writes its paths one per line and exits, which
-//! takes a few milliseconds instead of starting a second window.
+//! takes a few milliseconds instead of starting a second window. The name
+//! holds the user, the Windows session and a hash of the exe's path, as
+//! qview's does: pipe names are machine-wide, so without the session a file
+//! opened at the console would go to the same user's window in a remote
+//! desktop session, and an installed and a portable copy would take each
+//! other's files.
 
 use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerOptions, Name, Stream, prelude::*,
 };
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn socket_name() -> std::io::Result<Name<'static>> {
+    let file = socket_file_name(std::env::current_exe().unwrap_or_default().as_path());
+    if GenericNamespaced::is_supported() {
+        file.to_ns_name::<GenericNamespaced>()
+    } else {
+        std::env::temp_dir()
+            .join(file)
+            .to_fs_name::<GenericFilePath>()
+            .map(|n| n.into_owned())
+    }
+}
+
+/// `metalmd-<user>-<session>-<hash of the exe's path>.sock`.
+fn socket_file_name(exe: &Path) -> String {
+    use std::hash::{Hash, Hasher};
     let user = std::env::var("USERNAME")
         .or_else(|_| std::env::var("USER"))
         .unwrap_or_else(|_| "user".into());
@@ -18,14 +38,33 @@ fn socket_name() -> std::io::Result<Name<'static>> {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
-    if GenericNamespaced::is_supported() {
-        format!("metalmd-{user}.sock").to_ns_name::<GenericNamespaced>()
-    } else {
-        std::env::temp_dir()
-            .join(format!("metalmd-{user}.sock"))
-            .to_fs_name::<GenericFilePath>()
-            .map(|n| n.into_owned())
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    exe.to_string_lossy().to_lowercase().hash(&mut hasher);
+    format!(
+        "metalmd-{user}-{}-{:016x}.sock",
+        session_id(),
+        hasher.finish()
+    )
+}
+
+/// The Windows session this process runs in (0 elsewhere).
+#[cfg(windows)]
+fn session_id() -> u32 {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn ProcessIdToSessionId(process: u32, session: *mut u32) -> i32;
     }
+    let mut session = 0;
+    // SAFETY: plain Win32 call writing one u32.
+    unsafe {
+        ProcessIdToSessionId(std::process::id(), &mut session);
+    }
+    session
+}
+
+#[cfg(not(windows))]
+fn session_id() -> u32 {
+    0
 }
 
 /// Sends `paths` to a running instance. `Ok(true)` when one took them.
@@ -93,5 +132,21 @@ impl Server {
                 }
             })
             .expect("spawn single-instance thread");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_copy_of_the_exe_has_its_own_name() {
+        let installed = socket_file_name(Path::new(r"C:\Programs\MetalMD\metalmd.exe"));
+        let portable = socket_file_name(Path::new(r"D:\Tools\MetalMD\metalmd.exe"));
+        assert_ne!(installed, portable);
+        // Windows paths differ in case only by how they were typed.
+        let shouted = socket_file_name(Path::new(r"C:\PROGRAMS\MetalMD\METALMD.EXE"));
+        assert_eq!(installed, shouted);
+        assert!(installed.starts_with("metalmd-") && installed.ends_with(".sock"));
     }
 }
