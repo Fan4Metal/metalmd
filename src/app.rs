@@ -74,6 +74,9 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
     })
 }
 
+/// Windows narrower than this, in points, show no table of contents.
+const TOC_MIN_WINDOW: f32 = 560.0;
+
 /// How long the window rests after a move or resize before it is saved.
 const WINDOW_SAVE_DELAY: Duration = Duration::from_secs(1);
 
@@ -1111,18 +1114,24 @@ impl eframe::App for App {
         self.jump_to_find_match();
 
         let active_doc = self.tabs.get(self.active).and_then(|t| t.doc.clone());
+        // In a narrow window the contents take at most a third of it, and
+        // none below `TOC_MIN_WINDOW`: the text needs the room more. The
+        // setting stays, so a wider window shows them again.
+        let window_width = ui.available_width();
         if self.settings.toc_visible
+            && window_width >= TOC_MIN_WINDOW
             && let (Some(doc), Some(tab)) = (active_doc.as_ref(), self.tabs.get_mut(self.active))
             && !doc.headings.is_empty()
         {
+            let widest = (window_width * 0.35).clamp(140.0, 480.0);
             let panel = match self.settings.toc_side {
                 TocSide::Left => Panel::left("toc"),
                 TocSide::Right => Panel::right("toc"),
             };
             panel
                 .resizable(true)
-                .default_size(250.0)
-                .size_range(140.0..=480.0)
+                .default_size(250.0_f32.min(widest))
+                .size_range(140.0..=widest)
                 .frame(
                     Frame::new()
                         .fill(ui.visuals().panel_fill)
