@@ -53,7 +53,13 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 | Images | PNG, JPEG, GIF, WebP, SVG and BMP, local or over http(s) |
 | HTML | `<img>`, `<a>`, `<br>`, `<p align="center">`, `<b>`, `<i>`, `<kbd>`, `<sub>`, `<sup>`, `<mark>`, `<details>` (always open) |
 
-The following is **not** supported. Video, audio and YouTube previews are not shown. Markpad's extra alert types (`[!TODO]` and others), foldable alerts and `<details>`, `data:` images and HTML beyond the tags above are not supported either.
+**Not supported**:
+
+- video, audio and YouTube previews: they are not shown;
+- Markpad's extra alert types (`[!TODO]` and others), foldable alerts and folding `<details>`;
+- `data:` images;
+- HTML beyond the tags above;
+- flag emoji in colour: Segoe UI Emoji has no flags, so 🇷🇺 shows as the letters RU, as in browsers on Windows.
 
 ## Installation
 
