@@ -53,8 +53,8 @@ english.AssocTask=Register MetalMD for Markdown files (.md, .markdown, .mdown, .
 russian.AssocTask=Зарегистрировать MetalMD для файлов Markdown (.md, .markdown, .mdown, .mkd)
 english.DocType=Markdown document
 russian.DocType=Документ Markdown
-english.AppDescription=Fast Markdown viewer
-russian.AppDescription=Быстрый просмотр Markdown
+english.AppDescription=Fast Markdown viewer for Windows
+russian.AppDescription=Быстрый просмотрщик Markdown для Windows
 english.ChooseDefault=Choose MetalMD as the default program for Markdown (opens Windows Settings)
 russian.ChooseDefault=Выбрать MetalMD программой по умолчанию для Markdown (откроются параметры Windows)
 
