@@ -512,62 +512,77 @@ pub fn process_parenthesized_autolinks(content: &str) -> Cow<'_, str> {
     let mut output = String::new();
     let mut copied_to = 0;
     let mut scan_from = 0;
+    // An opening parenthesis and the one that closes it, within a run of
+    // text without whitespace (a URL ends at whitespace). Found for a whole
+    // run in one pass: scanning on from each `(http` would go over the same
+    // text again for every one of them, quadratic in a long run.
+    let mut opens: Vec<(usize, Option<usize>)> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
 
-    while let Some(opening_offset) = content[scan_from..].find('(') {
-        let opening = scan_from + opening_offset;
-        let url_start = opening + 1;
-        let url_tail = &content[url_start..];
-        if !(url_tail.starts_with("http://")
-            || url_tail.starts_with("https://")
-            || url_tail.starts_with("ftp://"))
-        {
-            scan_from = url_start;
-            continue;
-        }
-
-        let mut depth = 1usize;
-        let mut closing = None;
-        for (offset, ch) in url_tail.char_indices() {
-            if ch.is_whitespace() {
-                break;
-            }
-            match ch {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        closing = Some(url_start + offset);
-                        break;
+    let mut run_start = 0;
+    while run_start < content.len() {
+        let run_end = content[run_start..]
+            .find(char::is_whitespace)
+            .map_or(content.len(), |offset| run_start + offset);
+        let run = &content[run_start..run_end];
+        if run.contains('(') {
+            opens.clear();
+            stack.clear();
+            for (offset, byte) in run.bytes().enumerate() {
+                match byte {
+                    b'(' => {
+                        stack.push(opens.len());
+                        opens.push((run_start + offset, None));
                     }
+                    b')' => {
+                        if let Some(open) = stack.pop() {
+                            opens[open].1 = Some(run_start + offset);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+            for &(opening, closing) in &opens {
+                if opening < scan_from {
+                    continue;
+                }
+                let url_start = opening + 1;
+                let url_tail = &content[url_start..];
+                if !(url_tail.starts_with("http://")
+                    || url_tail.starts_with("https://")
+                    || url_tail.starts_with("ftp://"))
+                {
+                    continue;
+                }
+                let Some(closing) = closing else {
+                    continue;
+                };
+                let after_closing = closing + ')'.len_utf8();
+                scan_from = after_closing;
+                let adjacent_text = content[after_closing..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_alphanumeric);
+                if !adjacent_text || in_code_region(&regions, opening) {
+                    continue;
+                }
+
+                let url = &content[url_start..closing];
+                output.push_str(&content[copied_to..url_start]);
+                output.push('[');
+                output.push_str(url);
+                output.push_str("](");
+                output.push_str(url);
+                output.push(')');
+                output.push(')');
+                copied_to = after_closing;
             }
         }
-
-        let Some(closing) = closing else {
-            scan_from = url_start;
-            continue;
-        };
-        let after_closing = closing + ')'.len_utf8();
-        let adjacent_text = content[after_closing..]
+        // Past the whitespace that ended the run.
+        run_start = content[run_end..]
             .chars()
             .next()
-            .is_some_and(char::is_alphanumeric);
-        if !adjacent_text || in_code_region(&regions, opening) {
-            scan_from = after_closing;
-            continue;
-        }
-
-        let url = &content[url_start..closing];
-        output.push_str(&content[copied_to..url_start]);
-        output.push('[');
-        output.push_str(url);
-        output.push_str("](");
-        output.push_str(url);
-        output.push(')');
-        output.push(')');
-        copied_to = after_closing;
-        scan_from = after_closing;
+            .map_or(content.len(), |c| run_end + c.len_utf8());
     }
 
     if output.is_empty() {
@@ -687,6 +702,105 @@ mod tests {
     fn an_inline_span_before_a_fence_does_not_expose_the_fence() {
         let out = preprocess(FENCE_AFTER_INLINE_CODE);
         assert_eq!(out, FENCE_AFTER_INLINE_CODE);
+    }
+
+    /// Markpad's scan, one character at a time from each `(`: the reference
+    /// the one-pass version must agree with.
+    fn parenthesized_autolinks_by_rescanning(content: &str) -> String {
+        let regions = code_region_ranges(content);
+        let mut output = String::new();
+        let mut copied_to = 0;
+        let mut scan_from = 0;
+        while let Some(opening_offset) = content[scan_from..].find('(') {
+            let opening = scan_from + opening_offset;
+            let url_start = opening + 1;
+            let url_tail = &content[url_start..];
+            if !(url_tail.starts_with("http://")
+                || url_tail.starts_with("https://")
+                || url_tail.starts_with("ftp://"))
+            {
+                scan_from = url_start;
+                continue;
+            }
+            let mut depth = 1usize;
+            let mut closing = None;
+            for (offset, ch) in url_tail.char_indices() {
+                if ch.is_whitespace() {
+                    break;
+                }
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            closing = Some(url_start + offset);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(closing) = closing else {
+                scan_from = url_start;
+                continue;
+            };
+            let after_closing = closing + 1;
+            let adjacent_text = content[after_closing..]
+                .chars()
+                .next()
+                .is_some_and(char::is_alphanumeric);
+            if !adjacent_text || in_code_region(&regions, opening) {
+                scan_from = after_closing;
+                continue;
+            }
+            let url = &content[url_start..closing];
+            output.push_str(&content[copied_to..url_start]);
+            output.push_str(&format!("[{url}]({url}))"));
+            copied_to = after_closing;
+            scan_from = after_closing;
+        }
+        output.push_str(&content[copied_to..]);
+        output
+    }
+
+    #[test]
+    fn parenthesized_autolinks_match_the_rescanning_version() {
+        let pieces = [
+            "(",
+            ")",
+            "(http://a",
+            "(https://b.c/",
+            "x",
+            "Ж",
+            " ",
+            "\n",
+            "`",
+            "\u{3000}",
+            "ftp://",
+        ];
+        let mut state = 0x2545_f491_u32;
+        for _ in 0..5000 {
+            let mut text = String::new();
+            for _ in 0..(state % 24) {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                text.push_str(pieces[state as usize % pieces.len()]);
+            }
+            state = state.wrapping_add(1);
+            assert_eq!(
+                process_parenthesized_autolinks(&text),
+                parenthesized_autolinks_by_rescanning(&text),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unclosed_parenthesized_urls_take_linear_time() {
+        // Rescanning from each `(http` took minutes on this.
+        let text = "(http://a".repeat(200_000);
+        assert_eq!(process_parenthesized_autolinks(&text), text);
     }
 
     #[test]

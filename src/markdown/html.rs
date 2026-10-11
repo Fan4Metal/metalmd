@@ -173,7 +173,9 @@ pub fn decode_entities(text: &str) -> Cow<'_, str> {
     while let Some(amp) = rest.find('&') {
         out.push_str(&rest[..amp]);
         let after = &rest[amp + 1..];
-        let end = after.find(';').filter(|&e| e <= 10);
+        // The `;` within the longest name; searching the whole rest for it
+        // made text with many bare `&` quadratic.
+        let end = after.bytes().take(11).position(|b| b == b';');
         let decoded = end.and_then(|e| {
             let entity = &after[..e];
             let ch = match entity {
@@ -273,5 +275,15 @@ mod tests {
             decode_entities("a &amp; b &lt;c&gt; &#169; &#x41; &bogus; &"),
             "a & b <c> © A &bogus; &"
         );
+        // A `;` too far away to end a name leaves the `&` as it is.
+        assert_eq!(decode_entities("&amp x; y;"), "&amp x; y;");
+        assert_eq!(decode_entities("Привет &laquo;мир&raquo;"), "Привет «мир»");
+    }
+
+    #[test]
+    fn many_bare_ampersands_take_linear_time() {
+        // Searching the rest of the text for a `;` took seconds on this.
+        let text = "a & ".repeat(400_000);
+        assert_eq!(decode_entities(&text), text);
     }
 }
