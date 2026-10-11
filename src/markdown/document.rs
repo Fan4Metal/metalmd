@@ -384,7 +384,8 @@ impl Builder {
                 if !display.trim().is_empty() {
                     self.headings.push(HeadingEntry {
                         level: heading.level,
-                        text: display.trim().to_owned(),
+                        // One line in the table of contents.
+                        text: display.trim().replace('\n', " "),
                         slug: slug.clone(),
                         block: self.top,
                     });
@@ -1244,6 +1245,9 @@ fn collect_text<'a>(node: Node<'a>) -> String {
             NodeValue::Text(literal) => text.push_str(literal),
             NodeValue::Code(code) => text.push_str(&code.literal),
             NodeValue::Math(math) => text.push_str(&math.literal),
+            // A heading over two lines (setext): comrak's ids join them
+            // with a space.
+            NodeValue::SoftBreak | NodeValue::LineBreak => text.push(' '),
             _ => {}
         }
     }
@@ -1317,6 +1321,9 @@ mod tests {
             "## Objectives\n\n",
             "Setext heading\n",
             "---\n\n",
+            "Setext on\n",
+            "two lines\n",
+            "===\n\n",
             "## A **bold** word and `code`\n\n",
             "## 1. 概述\n\n",
             "```bash\n",
@@ -1332,6 +1339,7 @@ mod tests {
                 "Objectives",
                 "Objectives",
                 "Setext heading",
+                "Setext on two lines",
                 "A bold word and code",
                 "1. 概述",
             ]
@@ -1353,6 +1361,7 @@ mod tests {
         assert_eq!(objectives, vec!["objectives", "objectives-1"]);
         assert_eq!(doc.headings[0].level, 1);
         assert_eq!(doc.headings[1].level, 2);
+        assert_eq!(doc.headings[4].slug, "setext-on-two-lines");
         // Each heading points at its own top-level block.
         for heading in &doc.headings {
             assert!(matches!(doc.blocks[heading.block], Block::Heading { .. }));
