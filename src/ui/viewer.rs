@@ -51,6 +51,9 @@ pub enum ViewAction {
 pub struct ViewState {
     heights: Vec<f32>,
     measured: Vec<bool>,
+    /// Unmeasured because a picture in it was still being made when it was
+    /// measured: measured again when the worker that makes it repaints.
+    waiting: Vec<bool>,
     measured_width: f32,
     measured_fonts: u64,
     doc_identity: usize,
@@ -92,6 +95,7 @@ impl ViewState {
             self.doc_identity = identity;
             self.heights = doc.blocks.iter().map(|b| estimate(b, width)).collect();
             self.measured = vec![false; doc.blocks.len()];
+            self.waiting = vec![false; doc.blocks.len()];
             self.measured_width = width;
             self.measured_fonts = fonts;
             self.anchor = None;
@@ -99,6 +103,7 @@ impl ViewState {
         } else if (self.measured_width - width).abs() > 0.5 || self.measured_fonts != fonts {
             // Keep the old heights as estimates; they are closer than new ones.
             self.measured.fill(false);
+            self.waiting.fill(false);
             self.measured_width = width;
             self.measured_fonts = fonts;
         }
@@ -262,12 +267,20 @@ pub fn show_document(
                 view.heights[cursor] = draw_top_block(ui, doc, cursor, rect, rc, true);
                 // Measured again in a later frame, once its pictures are made.
                 view.measured[cursor] = !rc.pending;
+                view.waiting[cursor] = rc.pending;
                 remaining -= 1;
             }
             cursor = (cursor + 1) % count;
         }
         view.measure_cursor = cursor;
-        if remaining > 0 {
+        // Blocks that only wait for pictures need no frame until a worker
+        // repaints; asking for one would spin at full frame rate meanwhile.
+        let more = view
+            .measured
+            .iter()
+            .zip(&view.waiting)
+            .any(|(measured, waiting)| !measured && !waiting);
+        if more {
             ui.ctx().request_repaint();
         }
 
