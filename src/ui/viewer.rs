@@ -258,7 +258,7 @@ pub fn show_document(
         let mut index = first;
         while index < count && y < viewport.max.y + 1.0 {
             let rect = Rect::from_min_size(pos2(left, origin.y + y), vec2(content_width, 1.0e5));
-            let height = draw_top_block(ui, doc, index, rect, rc, false);
+            let height = draw_top_block(ui, doc, index, rect, rc, salt, false);
             view.heights[index] = height;
             view.measured[index] = true;
             y += height;
@@ -276,7 +276,7 @@ pub fn show_document(
                     vec2(content_width, 1.0e5),
                 );
                 rc.pending = false;
-                view.heights[cursor] = draw_top_block(ui, doc, cursor, rect, rc, true);
+                view.heights[cursor] = draw_top_block(ui, doc, cursor, rect, rc, salt, true);
                 // Measured again in a later frame, once its pictures are made.
                 view.measured[cursor] = !rc.pending;
                 view.waiting[cursor] = rc.pending;
@@ -310,18 +310,22 @@ pub fn show_document(
 }
 
 /// Draws (or, when `invisible`, only measures) top-level block `index` and
-/// returns its height including the gap after it.
+/// returns its height including the gap after it. `salt` is the document's:
+/// what egui keeps for a block (a code block's sideways scroll, a table's
+/// row heights) is then the tab's own, not shared with the block of the
+/// same number in another tab.
 fn draw_top_block(
     ui: &mut Ui,
     doc: &Document,
     index: usize,
     rect: Rect,
     rc: &mut RenderCtx<'_>,
+    salt: Id,
     invisible: bool,
 ) -> f32 {
     let mut builder = UiBuilder::new()
         .max_rect(rect)
-        .id_salt(("block", index))
+        .id_salt((salt, "block", index))
         .layout(Layout::top_down(egui::Align::Min));
     if invisible {
         builder = builder.invisible();
@@ -682,7 +686,7 @@ fn draw_table(ui: &mut Ui, table: &Table, rc: &mut RenderCtx<'_>, salt: u64) {
         }
     }
     // Cell heights from the previous frame, to centre cells in their row.
-    let heights_id = Id::new(("table-cells", salt));
+    let heights_id = ui.id().with(("table-cells", salt));
     let previous: Vec<f32> = ui.data(|d| d.get_temp(heights_id)).unwrap_or_default();
     let mut heights = vec![0.0f32; rows.len() * columns];
     Frame::new()
@@ -1769,7 +1773,7 @@ fn draw_code(
     if hovered {
         let button_rect =
             Rect::from_min_size(rect.right_top() + vec2(-64.0, 6.0), vec2(58.0, 22.0));
-        let copied_id = Id::new(("copied", salt, id));
+        let copied_id = ui.id().with(("copied", salt, id));
         let copied_at: Option<f64> = ui.data(|d| d.get_temp(copied_id));
         let now = ui.input(|i| i.time);
         let recently = copied_at.is_some_and(|t| now - t < 1.5);
