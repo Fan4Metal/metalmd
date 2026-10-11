@@ -26,9 +26,10 @@ static INTERNAL_EMBED_RE: LazyLock<Regex> =
 static WIKILINK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[\[([^\]]*#[^\]]*)\]\]").expect("valid regex literal"));
 /// ` ^block-id` at the end of a line. The leading whitespace is captured and
-/// re-emitted so a block id alone on its own line keeps its newline.
+/// re-emitted so a block id alone on its own line keeps its newline. `R`
+/// makes `$` match before `\r\n` and `\r` too: files from Windows editors.
 static BLOCK_ID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)(\s+)\^([a-zA-Z0-9_-]+)$").expect("valid regex literal"));
+    LazyLock::new(|| Regex::new(r"(?mR)(\s+)\^([a-zA-Z0-9_-]+)$").expect("valid regex literal"));
 
 /// Title marker carried by a rewritten embed so the renderer can apply the
 /// requested size: `![alt](src "qmd-size:300x200")`.
@@ -825,6 +826,20 @@ mod tests {
         );
         assert!(out.contains("<a id=\"own-line\""), "got: {out}");
         assert_eq!(out.lines().count(), 4);
+    }
+
+    #[test]
+    fn block_ids_are_found_with_windows_and_old_mac_line_ends() {
+        for source in [
+            "A paragraph ^para1\r\n\r\nNext\r\n",
+            "A paragraph ^para1\r\rNext\r",
+        ] {
+            let out = process_wikilinks(source);
+            assert!(
+                out.contains("A paragraph <a id=\"para1\" class=\"block-id-anchor\"></a>\r"),
+                "got: {out:?}"
+            );
+        }
     }
 
     #[test]
