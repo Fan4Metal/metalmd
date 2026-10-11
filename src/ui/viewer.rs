@@ -1493,6 +1493,15 @@ pub fn image_uri(src: &str, base_dir: Option<&Path>) -> Option<String> {
             base_dir?.join(relative)
         }
     };
+    // Reading a file on another computer sends it the user's credentials,
+    // which a document must not do by being opened. One next to the
+    // document, on its own computer, is fine.
+    let network_host = crate::ui::confirm::network_host;
+    if let Some(host) = network_host(&path)
+        && base_dir.and_then(network_host) != Some(host)
+    {
+        return None;
+    }
     Some(file_uri(&path))
 }
 
@@ -1811,6 +1820,20 @@ mod tests {
         } else {
             assert_eq!(uri, "file:///docs/img/my pic.png");
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn images_on_another_computer_are_not_loaded() {
+        let local = Some(Path::new(r"C:\docs"));
+        assert_eq!(image_uri("//evil/share/x.png", local), None);
+        assert_eq!(image_uri(r"\\evil\share\x.png", local), None);
+        let share = Some(Path::new(r"\\srv\docs"));
+        assert_eq!(
+            image_uri("img/x.png", share).as_deref(),
+            Some(r"file://srv\docs\img/x.png")
+        );
+        assert_eq!(image_uri(r"\\evil\share\x.png", share), None);
     }
 
     #[cfg(windows)]

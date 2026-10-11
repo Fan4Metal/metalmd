@@ -110,7 +110,7 @@ pub fn risk(target: &LinkTarget, document: Option<&Path>) -> Option<Risk> {
 }
 
 /// The computer a UNC path (`\\host\share\…`) is on, in lower case.
-fn network_host(path: &Path) -> Option<String> {
+pub fn network_host(path: &Path) -> Option<String> {
     let text = path.to_str()?;
     let rest = text
         .strip_prefix(r"\\")
