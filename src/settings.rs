@@ -142,7 +142,8 @@ impl Settings {
             .and_then(|path| std::fs::read(path).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .map(|mut settings: Settings| {
-                if !(0.3..=5.0).contains(&settings.zoom) {
+                // What egui's zoom keys reach: 0.2 to 5.
+                if !(0.2..=5.0).contains(&settings.zoom) {
                     settings.zoom = 1.0;
                 }
                 settings
