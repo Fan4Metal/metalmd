@@ -7,6 +7,7 @@ pub mod diagram;
 pub mod emoji;
 pub mod find;
 pub mod home;
+pub mod limit;
 pub mod math;
 pub mod render_cache;
 pub mod svg;

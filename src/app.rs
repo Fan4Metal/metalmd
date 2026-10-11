@@ -234,6 +234,8 @@ impl App {
         egui_extras::install_image_loaders(&ctx);
         crate::ui::animation::ApngLoader::install(&ctx);
         crate::ui::svg::SvgLoader::install(&ctx);
+        // Last: it stands in front of the loaders above.
+        crate::ui::limit::LimitLoader::install(&ctx);
         ctx.add_plugin(crate::ui::copy::CopyPlugin);
         if let Some(b) = bench.as_mut() {
             b.mark("fonts_ready");

@@ -97,7 +97,14 @@ fn is_other_image(uri: &str) -> bool {
         || egui::decode_animated_image_uri(uri).is_ok()
 }
 
-fn rasterize(bytes: &[u8], hint: SizeHint) -> Result<ColorImage, String> {
+/// Texels an SVG is drawn into at most (256 MB): an SVG names its own size,
+/// and `width="100000"` would otherwise ask for 40 GB.
+const MAX_PIXELS: f32 = 64.0 * 1024.0 * 1024.0;
+
+/// `bytes` drawn at the size `hint` asks for, made smaller if a side would
+/// exceed `max_side` (the GPU's limit) or the area [`MAX_PIXELS`]; its size
+/// in points stays the SVG's.
+fn rasterize(bytes: &[u8], hint: SizeHint, max_side: usize) -> Result<ColorImage, String> {
     let has_text = bytes.windows(5).any(|w| w == b"<text");
     let options = if has_text {
         text_options()
@@ -123,8 +130,21 @@ fn rasterize(bytes: &[u8], hint: SizeHint) -> Result<ColorImage, String> {
         SizeHint::Width(w) => source * (w as f32 / source.x),
         SizeHint::Height(h) => source * (h as f32 / source.y),
         SizeHint::Scale(scale) => source * scale.into_inner(),
+    };
+    let longest = size.x.max(size.y);
+    let size = if longest > max_side as f32 {
+        size * (max_side as f32 / longest)
+    } else {
+        size
+    };
+    let area = size.x * size.y;
+    let size = if area > MAX_PIXELS {
+        size * (MAX_PIXELS / area).sqrt()
+    } else {
+        size
     }
-    .round();
+    .round()
+    .max(Vec2::splat(1.0));
     let (w, h) = (size.x as u32, size.y as u32);
     let mut pixmap = Pixmap::new(w, h).ok_or_else(|| format!("Bad SVG size {w}x{h}"))?;
     resvg::render(
@@ -199,7 +219,8 @@ impl ImageLoader for SvgLoader {
         if !named_svg && !is_svg(&bytes, mime.as_deref()) {
             return Err(LoadError::NotSupported);
         }
-        let result = rasterize(&bytes, hint).map(Arc::new);
+        let max_side = ctx.input(|i| i.max_texture_side);
+        let result = rasterize(&bytes, hint, max_side).map(Arc::new);
         let poll = match &result {
             Ok(image) => Ok(ImagePoll::Ready {
                 image: Arc::clone(image),
@@ -255,6 +276,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn huge_svg_is_drawn_smaller_at_its_own_size() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="50"/>"#;
+        let image = rasterize(svg, SizeHint::Scale(1.0.into()), 16384).unwrap();
+        assert_eq!(image.size, [16384, 8]);
+        assert_eq!(image.source_size, Vec2::new(100000.0, 50.0));
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="100000"/>"#;
+        let image = rasterize(svg, SizeHint::Scale(1.0.into()), 16384).unwrap();
+        assert_eq!(image.size, [8192, 8192]);
+    }
+
+    #[test]
     fn svg_is_recognised_by_markup_or_media_type() {
         assert!(is_svg(b"<svg xmlns='http://www.w3.org/2000/svg'/>", None));
         assert!(is_svg(b"\xEF\xBB\xBF\n<?xml version='1.0'?>\n<svg/>", None));
@@ -278,7 +310,7 @@ mod tests {
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="60" height="20">
             <text x="2" y="15" font-family="Verdana,Geneva,DejaVu Sans,sans-serif"
                   font-size="11" fill="#000">release</text></svg>"##;
-        let image = rasterize(svg, SizeHint::Scale(1.0.into())).unwrap();
+        let image = rasterize(svg, SizeHint::Scale(1.0.into()), 8192).unwrap();
         assert_eq!(image.size, [60, 20]);
         let inked = image.pixels.iter().filter(|p| p.a() > 0).count();
         assert!(inked > 20, "text should leave pixels, got {inked}");
