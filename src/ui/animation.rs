@@ -112,11 +112,19 @@ pub fn is_apng(bytes: &[u8]) -> bool {
 
 type Frames = Result<Arc<Vec<Arc<ColorImage>>>, String>;
 
+enum Decoded {
+    /// On a thread of its own: every frame of a large APNG takes a while.
+    Decoding,
+    Done(Frames),
+}
+
+type Cache = Arc<Mutex<HashMap<String, Decoded>>>;
+
 /// Loads `uri#frame` for animated PNGs. `frame_uri` is what asks for it; any
 /// other URI is left to egui_extras' loaders.
 #[derive(Default)]
 pub struct ApngLoader {
-    cache: Mutex<HashMap<String, Frames>>,
+    cache: Cache,
 }
 
 impl ApngLoader {
@@ -161,11 +169,11 @@ impl ImageLoader for ApngLoader {
             image: Arc::clone(&frames[index % frames.len()]),
         };
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = cache.get(uri) {
-            return match entry {
-                Ok(frames) => Ok(frame(frames)),
-                Err(e) => Err(LoadError::Loading(e.clone())),
-            };
+        match cache.get(uri) {
+            Some(Decoded::Done(Ok(frames))) => return Ok(frame(frames)),
+            Some(Decoded::Done(Err(e))) => return Err(LoadError::Loading(e.clone())),
+            Some(Decoded::Decoding) => return Ok(ImagePoll::Pending { size: None }),
+            None => {}
         }
         match ctx.try_load_bytes(uri)? {
             BytesPoll::Pending { size } => Ok(ImagePoll::Pending { size }),
@@ -173,19 +181,25 @@ impl ImageLoader for ApngLoader {
                 if !is_apng(&bytes) {
                     return Err(LoadError::NotSupported);
                 }
-                match decode_apng(&bytes) {
-                    Ok((frames, durations)) => {
-                        ctx.data_mut(|d| d.insert_temp(Id::new(uri), durations));
-                        let frames = Arc::new(frames);
-                        let poll = frame(&frames);
-                        cache.insert(uri.to_owned(), Ok(frames));
-                        Ok(poll)
+                cache.insert(uri.to_owned(), Decoded::Decoding);
+                let (cache, ctx, uri) = (Arc::clone(&self.cache), ctx.clone(), uri.to_owned());
+                std::thread::spawn(move || {
+                    let result = decode_apng(&bytes).map(|(frames, durations)| {
+                        // Before the frames can be asked for, and not under
+                        // the cache's lock, which egui may want while it
+                        // holds its own.
+                        ctx.data_mut(|d| d.insert_temp(Id::new(uri.as_str()), durations));
+                        Arc::new(frames)
+                    });
+                    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+                    // Unless forgotten meanwhile.
+                    if let Some(entry @ Decoded::Decoding) = cache.get_mut(&uri) {
+                        *entry = Decoded::Done(result);
                     }
-                    Err(e) => {
-                        cache.insert(uri.to_owned(), Err(e.clone()));
-                        Err(LoadError::Loading(e))
-                    }
-                }
+                    drop(cache);
+                    ctx.request_repaint();
+                });
+                Ok(ImagePoll::Pending { size: None })
             }
         }
     }
@@ -206,8 +220,9 @@ impl ImageLoader for ApngLoader {
         cache
             .values()
             .map(|entry| match entry {
-                Ok(frames) => frames.iter().map(|f| f.pixels.len() * 4).sum(),
-                Err(e) => e.len(),
+                Decoded::Done(Ok(frames)) => frames.iter().map(|f| f.pixels.len() * 4).sum(),
+                Decoded::Done(Err(e)) => e.len(),
+                Decoded::Decoding => 0,
             })
             .sum()
     }

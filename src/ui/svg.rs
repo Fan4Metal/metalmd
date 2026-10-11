@@ -52,9 +52,12 @@ const FONT_FILES: &[&str] = &[
     "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
 ];
 
+static TEXT_OPTIONS: OnceLock<Options<'static>> = OnceLock::new();
+
+/// The options with the fonts for text, read the first time they are asked
+/// for (blocking): for worker threads.
 pub fn text_options() -> &'static Options<'static> {
-    static OPTIONS: OnceLock<Options<'static>> = OnceLock::new();
-    OPTIONS.get_or_init(|| {
+    TEXT_OPTIONS.get_or_init(|| {
         let mut options = Options::default();
         let db = options.fontdb_mut();
         for name in FONT_FILES {
@@ -68,6 +71,59 @@ pub fn text_options() -> &'static Options<'static> {
         }
         options
     })
+}
+
+/// `hint` with its sizes rounded up in steps of 8% (sizes up to 256 pixels
+/// stay exact). An SVG with a width set gets the column's width as the hint,
+/// and this loader draws on the UI thread: without the steps, dragging the
+/// window's edge drew it again at every frame. Drawn up to 8% larger, it is
+/// scaled down on screen.
+fn coarse(hint: SizeHint) -> SizeHint {
+    fn up(pixels: u32) -> u32 {
+        if pixels <= 256 {
+            return pixels;
+        }
+        let step = |k: f32| (256.0 * 1.08_f32.powf(k)).ceil() as u32;
+        // The step below, then up to the first one not smaller: rounding
+        // error alone must not skip a step.
+        let mut k = ((pixels as f32 / 256.0).ln() / 1.08_f32.ln()).floor();
+        while step(k) < pixels {
+            k += 1.0;
+        }
+        step(k)
+    }
+    match hint {
+        SizeHint::Size {
+            width,
+            height,
+            maintain_aspect_ratio,
+        } => SizeHint::Size {
+            width: up(width),
+            height: up(height),
+            maintain_aspect_ratio,
+        },
+        SizeHint::Width(w) => SizeHint::Width(up(w)),
+        SizeHint::Height(h) => SizeHint::Height(up(h)),
+        SizeHint::Scale(scale) => SizeHint::Scale(scale),
+    }
+}
+
+/// The options with the fonts for text if they are read; otherwise starts
+/// reading them on a thread of their own, which repaints when done. Reading
+/// a dozen font files would stall the UI thread, where this loader runs.
+fn text_options_ready(ctx: &Context) -> Option<&'static Options<'static>> {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if let Some(options) = TEXT_OPTIONS.get() {
+        return Some(options);
+    }
+    if !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            text_options();
+            ctx.request_repaint();
+        });
+    }
+    None
 }
 
 fn plain_options() -> &'static Options<'static> {
@@ -101,12 +157,16 @@ fn is_other_image(uri: &str) -> bool {
 /// and `width="100000"` would otherwise ask for 40 GB.
 const MAX_PIXELS: f32 = 64.0 * 1024.0 * 1024.0;
 
+/// The SVG draws text, so it needs [`text_options`].
+fn has_text(bytes: &[u8]) -> bool {
+    bytes.windows(5).any(|w| w == b"<text")
+}
+
 /// `bytes` drawn at the size `hint` asks for, made smaller if a side would
 /// exceed `max_side` (the GPU's limit) or the area [`MAX_PIXELS`]; its size
 /// in points stays the SVG's.
 fn rasterize(bytes: &[u8], hint: SizeHint, max_side: usize) -> Result<ColorImage, String> {
-    let has_text = bytes.windows(5).any(|w| w == b"<text");
-    let options = if has_text {
+    let options = if has_text(bytes) {
         text_options()
     } else {
         plain_options()
@@ -197,6 +257,7 @@ impl ImageLoader for SvgLoader {
         if is_other_image(uri) {
             return Err(LoadError::NotSupported);
         }
+        let hint = coarse(hint);
         let mut state = self.state();
         let pass = state.pass;
         if let Some(entry) = state.cache.get_mut(uri).and_then(|b| b.get_mut(&hint)) {
@@ -218,6 +279,9 @@ impl ImageLoader for SvgLoader {
         };
         if !named_svg && !is_svg(&bytes, mime.as_deref()) {
             return Err(LoadError::NotSupported);
+        }
+        if has_text(&bytes) && text_options_ready(ctx).is_none() {
+            return Ok(ImagePoll::Pending { size: None });
         }
         let max_side = ctx.input(|i| i.max_texture_side);
         let result = rasterize(&bytes, hint, max_side).map(Arc::new);
@@ -274,6 +338,21 @@ impl ImageLoader for SvgLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_change_in_steps_of_eight_percent() {
+        assert_eq!(coarse(SizeHint::Width(200)), SizeHint::Width(200));
+        let widths: std::collections::BTreeSet<u32> = (700..=760)
+            .map(|w| match coarse(SizeHint::Width(w)) {
+                SizeHint::Width(c) => {
+                    assert!(c >= w && (c as f32) < w as f32 * 1.081, "{w} -> {c}");
+                    c
+                }
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert!(widths.len() <= 2, "{widths:?}");
+    }
 
     #[test]
     fn huge_svg_is_drawn_smaller_at_its_own_size() {
