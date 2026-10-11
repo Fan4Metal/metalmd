@@ -38,7 +38,19 @@ fn main() -> eframe::Result {
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some("--bench") => bench_output = args.next().map(PathBuf::from),
+            Some("--bench") => {
+                // Only a .json file: `--bench notes.md`, the timings file
+                // forgotten, would write the timings over the document.
+                let output = args.next().map(PathBuf::from).filter(|p| {
+                    p.extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                });
+                let Some(output) = output else {
+                    eprintln!("usage: metalmd --bench <timings.json> [FILE...]");
+                    std::process::exit(2);
+                };
+                bench_output = Some(output);
+            }
             Some("--new-instance") => new_instance = true,
             Some("--export-icon") => {
                 // For tools/make_release.py: the installer's icon, then exit.

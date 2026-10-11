@@ -1165,11 +1165,18 @@ impl eframe::App for App {
             self.settings_dirty = true;
         }
         self.remember_window(&ctx);
-        self.save_settings_if_needed();
+        // A benchmark run leaves the settings and recent files alone.
+        if self.bench.is_none() {
+            self.save_settings_if_needed();
+        }
 
         if let Some(bench) = self.bench.as_mut() {
-            let painted_doc =
-                self.tabs.get(self.active).is_some_and(|t| t.doc.is_some()) || self.tabs.is_empty();
+            // The document, or the error in its place when it cannot be read.
+            let painted_doc = self
+                .tabs
+                .get(self.active)
+                .is_some_and(|t| t.doc.is_some() || t.error.is_some())
+                || self.tabs.is_empty();
             if painted_doc {
                 bench.mark_once("doc_frame_end");
             }
