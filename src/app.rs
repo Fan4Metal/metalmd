@@ -100,17 +100,13 @@ pub fn spawn_load(sender: Sender<AppMsg>, cell: CtxCell, tab: u64, generation: u
         .expect("spawn loader thread");
 }
 
-/// Absolute, symlink-resolved path without Windows' `\\?\` prefix.
+/// The absolute path, `.` and `..` resolved, without Windows' `\\?\`
+/// prefix. Not `canonicalize`: it turns a mapped drive (`Z:\a.md`) into the
+/// share behind it, shown in the title and the recent files, and its `\\?\`
+/// form, once stripped, would lose paths over 260 characters (std adds the
+/// prefix itself where a path needs it). As in qview.
 pub fn normalize_path(path: &Path) -> PathBuf {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map(|d| d.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
-    };
-    let canonical = std::fs::canonicalize(&absolute).unwrap_or(absolute);
-    strip_verbatim(canonical)
+    strip_verbatim(std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
 fn strip_verbatim(path: PathBuf) -> PathBuf {
@@ -1391,6 +1387,20 @@ mod tests {
         assert_eq!(resolve_anchor(&doc, "Getting Started"), Some(1));
         assert_eq!(resolve_anchor(&doc, "1-%E6%A6%82%E8%BF%B0"), Some(2));
         assert_eq!(resolve_anchor(&doc, "missing"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn paths_are_made_absolute_and_keep_their_drive() {
+        assert_eq!(
+            normalize_path(Path::new(r"Z:\docs\..\a.md")),
+            PathBuf::from(r"Z:\a.md")
+        );
+        assert_eq!(
+            normalize_path(Path::new(r"C:\a\.\b.md")),
+            PathBuf::from(r"C:\a\b.md")
+        );
+        assert!(normalize_path(Path::new("a.md")).is_absolute());
     }
 
     #[test]
