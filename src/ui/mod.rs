@@ -165,6 +165,35 @@ pub fn about_button(ui: &mut Ui) -> Response {
     )
 }
 
+/// The Copy button of a code block, filling `rect`: two overlapping sheets,
+/// or a tick for a moment after a copy.
+pub fn copy_button(ui: &mut Ui, rect: egui::Rect, copied: bool) -> Response {
+    use egui::{Rect, Stroke, StrokeKind, pos2, vec2};
+    let response = ui.put(
+        rect,
+        egui::Button::new("").min_size(rect.size()).corner_radius(4),
+    );
+    let visuals = ui.style().interact(&response);
+    let (c, painter) = (response.rect.center(), ui.painter());
+    let stroke = Stroke::new(1.3, visuals.text_color());
+    if copied {
+        let tick = [(-5.0, 0.5), (-1.5, 4.0), (5.0, -3.5)].map(|(x, y)| pos2(c.x + x, c.y + y));
+        painter.add(egui::epaint::PathShape::line(tick.to_vec(), stroke));
+    } else {
+        let sheet = |x: f32, y: f32| Rect::from_min_size(c + vec2(x, y), vec2(8.0, 10.0));
+        painter.rect_stroke(sheet(-6.0, -7.0), 1.5, stroke, StrokeKind::Middle);
+        // The front sheet hides the back one where they overlap.
+        painter.rect_filled(sheet(-2.0, -3.0), 1.5, visuals.weak_bg_fill);
+        painter.rect_stroke(sheet(-2.0, -3.0), 1.5, stroke, StrokeKind::Middle);
+    }
+    let tip = if copied {
+        tr!("Copied", "Скопировано")
+    } else {
+        tr!("Copy", "Копировать")
+    };
+    response.on_hover_text(tip)
+}
+
 /// The theme switch: a half-filled circle while following Windows, a sun
 /// for the light theme, a moon for the dark one; a click moves on to the
 /// next of the three.

@@ -1772,18 +1772,12 @@ fn draw_code(
     let hovered = ui.rect_contains_pointer(rect);
     if hovered {
         let button_rect =
-            Rect::from_min_size(rect.right_top() + vec2(-64.0, 6.0), vec2(58.0, 22.0));
+            Rect::from_min_size(rect.right_top() + vec2(-32.0, 6.0), vec2(26.0, 24.0));
         let copied_id = ui.id().with(("copied", salt, id));
         let copied_at: Option<f64> = ui.data(|d| d.get_temp(copied_id));
         let now = ui.input(|i| i.time);
         let recently = copied_at.is_some_and(|t| now - t < 1.5);
-        let text = if recently {
-            tr!("Copied", "Скопировано")
-        } else {
-            tr!("Copy", "Копировать")
-        };
-        let button = egui::Button::new(egui::RichText::new(text).size(12.0)).corner_radius(4);
-        if ui.put(button_rect, button).clicked() {
+        if super::copy_button(ui, button_rect, recently).clicked() {
             ui.ctx().copy_text(code.to_owned());
             ui.data_mut(|d| d.insert_temp(copied_id, now));
         }
