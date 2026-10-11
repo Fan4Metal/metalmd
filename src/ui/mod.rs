@@ -13,7 +13,7 @@ pub mod svg;
 pub mod toc;
 pub mod viewer;
 
-use crate::settings::ThemeSetting;
+use crate::settings::{ThemeSetting, TocSide};
 use egui::{Response, TextureHandle, TextureOptions, Ui};
 
 /// The app icon as a texture for `points` wide, from the smallest embedded
@@ -71,13 +71,17 @@ pub fn toc_button(ui: &mut Ui, visible: bool) -> Response {
     use egui::{Stroke, vec2};
     let tip = if visible {
         tr!(
-            "Hide the table of contents (Ctrl+Shift+O)",
-            "Скрыть содержание (Ctrl+Shift+O)"
+            "Hide the table of contents (Ctrl+Shift+O)
+Right-click: left or right side",
+            "Скрыть содержание (Ctrl+Shift+O)
+Правый щелчок: слева или справа"
         )
     } else {
         tr!(
-            "Show the table of contents (Ctrl+Shift+O)",
-            "Показать содержание (Ctrl+Shift+O)"
+            "Show the table of contents (Ctrl+Shift+O)
+Right-click: left or right side",
+            "Показать содержание (Ctrl+Shift+O)
+Правый щелчок: слева или справа"
         )
     };
     icon_button(ui, "toc_icon", visible, tip, |painter, c, color, _| {
@@ -89,6 +93,29 @@ pub fn toc_button(ui: &mut Ui, visible: bool) -> Response {
             );
         }
     })
+}
+
+/// The context menu of the table of contents and its button: the side of
+/// the window it is on. Returns `true` when the side changed.
+pub fn toc_side_menu(response: &Response, side: &mut TocSide) -> bool {
+    let before = *side;
+    response.context_menu(|ui| {
+        for (value, label) in [
+            (
+                TocSide::Left,
+                tr!("Contents on the left", "Содержание слева"),
+            ),
+            (
+                TocSide::Right,
+                tr!("Contents on the right", "Содержание справа"),
+            ),
+        ] {
+            if ui.radio_value(side, value, label).clicked() {
+                ui.close();
+            }
+        }
+    });
+    *side != before
 }
 
 /// Opens the About window: an "i" in a circle.

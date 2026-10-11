@@ -5,7 +5,7 @@ use crate::fs_text;
 use crate::markdown::document::{Block, Document, Scripts};
 use crate::markdown::highlight::Highlighter;
 use crate::markdown::preprocess::{heading_anchor_id, is_markdown_path, percent_decode};
-use crate::settings::{Settings, ThemeSetting, same_path};
+use crate::settings::{Settings, ThemeSetting, TocSide, same_path};
 use crate::single_instance::Server;
 use crate::style::{self, BODY_SIZE, FontChoice, Palette};
 use crate::ui::about::About;
@@ -20,7 +20,7 @@ use crate::ui::viewer::{self, RenderCtx, ViewAction, ViewState};
 use crate::watcher::FileWatcher;
 use egui::{
     Align, CentralPanel, Color32, FontData, FontDefinitions, Frame, Id, Key, KeyboardShortcut,
-    Layout, Margin, Modifiers, Panel, RichText, TextEdit, Theme, Ui, ViewportCommand,
+    Layout, Margin, Modifiers, Panel, RichText, Sense, TextEdit, Theme, Ui, ViewportCommand,
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
@@ -775,8 +775,14 @@ impl App {
                             ui.ctx().set_theme(self.settings.theme.preference());
                             self.settings_dirty = true;
                         }
-                        if crate::ui::toc_button(ui, self.settings.toc_visible).clicked() {
+                        let toc = crate::ui::toc_button(ui, self.settings.toc_visible);
+                        if toc.clicked() {
                             self.settings.toc_visible = !self.settings.toc_visible;
+                            self.settings_dirty = true;
+                        }
+                        if crate::ui::toc_side_menu(&toc, &mut self.settings.toc_side) {
+                            // Choosing a side shows the contents there.
+                            self.settings.toc_visible = true;
                             self.settings_dirty = true;
                         }
                         // Left of the icons, so it doesn't split them up.
@@ -1018,7 +1024,11 @@ impl eframe::App for App {
             && let (Some(doc), Some(tab)) = (active_doc.as_ref(), self.tabs.get_mut(self.active))
             && !doc.headings.is_empty()
         {
-            Panel::left("toc")
+            let panel = match self.settings.toc_side {
+                TocSide::Left => Panel::left("toc"),
+                TocSide::Right => Panel::right("toc"),
+            };
+            panel
                 .resizable(true)
                 .default_size(250.0)
                 .size_range(140.0..=480.0)
@@ -1028,6 +1038,12 @@ impl eframe::App for App {
                         .inner_margin(Margin::symmetric(10, 4)),
                 )
                 .show(ui, |ui| {
+                    // Right-clicking the panel outside the headings moves it.
+                    let background =
+                        ui.interact(ui.max_rect(), Id::new("toc-background"), Sense::click());
+                    if crate::ui::toc_side_menu(&background, &mut self.settings.toc_side) {
+                        self.settings_dirty = true;
+                    }
                     if let Some(index) = toc::show(ui, doc, &tab.view, &palette) {
                         let block = doc.headings[index].block;
                         if let Some(position) = tab.view.reading_position() {

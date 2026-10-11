@@ -75,7 +75,7 @@ This file holds most of the subtle logic:
 ### Other modules
 
 - `style.rs`: GitHub-like palettes, egui visuals, and system font loading (Segoe UI with real bold and italic faces, plus Consolas, on Windows) with egui's bundled fonts as fallbacks.
-- `app.rs`: tabs, link resolution (`#anchor`, relative `.md` opened in a tab with fragment, other targets via `open`), shortcuts, find bar, and the TOC panel.
+- `app.rs`: tabs, link resolution (`#anchor`, relative `.md` opened in a tab with fragment, other targets via `open`), shortcuts, find bar, and the TOC panel (left or right, `Settings::toc_side`, chosen in the context menu of its button or of the panel, `ui::toc_side_menu`).
 - `src/icon.rs` draws the app icon procedurally and has no dependencies. `build.rs` includes it via `#[path]`, writes the `.ico` embedded by `winresource`, and writes `app_icon_{64,128,256}.rgba` into `OUT_DIR`. `main::embedded_icon` includes those bytes for the window icon, the start page and About (`ui::app_icon`), so nothing is rasterized at startup. This is the same scheme as the sibling apps qview and disk_flashlight, whose About dialog, start screen and theme button (`ui::theme_button`) these UI pieces mirror.
 - `watcher.rs` watches the parent directory, not the file, so save-by-rename is caught, and coalesces events for 150 ms.
 

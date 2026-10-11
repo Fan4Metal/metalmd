@@ -34,6 +34,15 @@ impl ThemeSetting {
     }
 }
 
+/// The side of the window the table of contents is on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TocSide {
+    #[default]
+    Left,
+    Right,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WindowGeometry {
     pub x: f32,
@@ -49,6 +58,7 @@ pub struct Settings {
     pub theme: ThemeSetting,
     pub zoom: f32,
     pub toc_visible: bool,
+    pub toc_side: TocSide,
     /// Interface language, chosen in About.
     pub language: LangChoice,
     pub recent: Vec<PathBuf>,
@@ -61,6 +71,7 @@ impl Default for Settings {
             theme: ThemeSetting::System,
             zoom: 1.0,
             toc_visible: true,
+            toc_side: TocSide::Left,
             language: LangChoice::System,
             recent: Vec::new(),
             window: None,
@@ -217,6 +228,7 @@ mod tests {
         let settings = Settings {
             theme: ThemeSetting::Dark,
             zoom: 1.25,
+            toc_side: TocSide::Right,
             ..Settings::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
@@ -224,5 +236,6 @@ mod tests {
         let partial: Settings = serde_json::from_str(r#"{"theme":"light","future":1}"#).unwrap();
         assert_eq!(partial.theme, ThemeSetting::Light);
         assert_eq!(partial.zoom, 1.0);
+        assert_eq!(partial.toc_side, TocSide::Left);
     }
 }
