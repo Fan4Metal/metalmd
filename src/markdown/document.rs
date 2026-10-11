@@ -271,9 +271,22 @@ fn detect_scripts(source: &str) -> Scripts {
     scripts
 }
 
+/// Containers (quotes, lists, alerts…) nested deeper than this are not
+/// kept: their blocks go into the container at this depth. The viewer draws
+/// nesting recursively, and a few hundred levels (a 300-byte file of `>`)
+/// would overflow the main thread's stack; building them would overflow the
+/// loader's.
+const MAX_BLOCK_DEPTH: usize = 32;
+
+/// Inline markup (emphasis, links…) nested deeper than this becomes plain
+/// text, for the same reason.
+const MAX_INLINE_DEPTH: usize = 64;
+
 #[derive(Default)]
 struct Builder {
     anchorizer: Anchorizer,
+    /// Containers open around the block being built.
+    depth: usize,
     next_id: u32,
     /// Index of the top-level block being built (into the final `blocks`).
     top: usize,
@@ -312,9 +325,22 @@ impl Builder {
 
     fn children_blocks<'a>(&mut self, node: Node<'a>) -> Vec<Block> {
         let mut out = Vec::new();
-        for child in node.children() {
-            self.block(child, &mut out);
+        self.depth += 1;
+        if self.depth >= MAX_BLOCK_DEPTH {
+            // Iterates rather than recursing: only the leaf blocks below.
+            for descendant in node.descendants().skip(1) {
+                let value = &descendant.data().value;
+                let part_of_table = matches!(value, NodeValue::TableRow(_) | NodeValue::TableCell);
+                if value.block() && !is_container(value) && !part_of_table {
+                    self.block(descendant, &mut out);
+                }
+            }
+        } else {
+            for child in node.children() {
+                self.block(child, &mut out);
+            }
         }
+        self.depth -= 1;
         out
     }
 
@@ -600,6 +626,25 @@ impl Builder {
     }
 }
 
+/// A block that holds other blocks, as opposed to text, code or a table.
+fn is_container(value: &NodeValue) -> bool {
+    matches!(
+        value,
+        NodeValue::Document
+            | NodeValue::BlockQuote
+            | NodeValue::MultilineBlockQuote(_)
+            | NodeValue::Alert(_)
+            | NodeValue::List(_)
+            | NodeValue::Item(_)
+            | NodeValue::TaskItem(_)
+            | NodeValue::FootnoteDefinition(_)
+            | NodeValue::DescriptionList
+            | NodeValue::DescriptionItem(_)
+            | NodeValue::DescriptionTerm
+            | NodeValue::DescriptionDetails
+    )
+}
+
 fn is_html_block_tag(name: &str) -> bool {
     matches!(
         name,
@@ -663,6 +708,8 @@ struct InlineCtx {
     html_links: Vec<bool>,
     link: Option<String>,
     collapse_whitespace: bool,
+    /// Inline nodes open around the one being added.
+    depth: usize,
 }
 
 impl InlineCtx {
@@ -676,6 +723,7 @@ impl InlineCtx {
             html_links: Vec::new(),
             link: None,
             collapse_whitespace: false,
+            depth: 0,
         }
     }
 
@@ -804,9 +852,7 @@ impl InlineCtx {
 
     fn with_link<'a>(&mut self, builder: &mut Builder, node: Node<'a>, style: Style, url: String) {
         let saved = self.link.replace(url);
-        for child in node.children() {
-            self.node(builder, child, style);
-        }
+        self.children(builder, node, style);
         self.link = saved;
     }
 
@@ -905,9 +951,15 @@ impl InlineCtx {
     }
 
     fn children<'a>(&mut self, builder: &mut Builder, node: Node<'a>, style: Style) {
+        if self.depth >= MAX_INLINE_DEPTH {
+            self.push_text(&collect_text(node), style);
+            return;
+        }
+        self.depth += 1;
         for child in node.children() {
             self.node(builder, child, style);
         }
+        self.depth -= 1;
     }
 
     fn html_open(&mut self, name: &str, style: Style) {
@@ -1453,6 +1505,52 @@ mod tests {
         );
         assert_eq!(doc.search.len(), 1);
         assert_eq!(doc.search[0].block, 0);
+    }
+
+    /// Levels of quotes and lists, the deepest path.
+    fn nesting(blocks: &[Block]) -> usize {
+        blocks
+            .iter()
+            .map(|block| match block {
+                Block::Quote(inner) => 1 + nesting(inner),
+                Block::List { items, .. } => {
+                    1 + items.iter().map(|i| nesting(&i.blocks)).max().unwrap_or(0)
+                }
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn deep_nesting_is_cut_off_and_keeps_the_text() {
+        let quotes = Document::parse(&format!(
+            "{} deep
+",
+            ">".repeat(3000)
+        ));
+        assert_eq!(nesting(&quotes.blocks), MAX_BLOCK_DEPTH);
+        assert!(quotes.search.iter().any(|s| s.text == "deep"));
+
+        let list: String = (0..300)
+            .map(|i| {
+                format!(
+                    "{}- item {i}
+",
+                    "  ".repeat(i)
+                )
+            })
+            .collect();
+        let list = Document::parse(&list);
+        assert_eq!(nesting(&list.blocks), MAX_BLOCK_DEPTH);
+        for i in [0, 31, 32, 299] {
+            let text = format!("item {i}");
+            assert!(list.search.iter().any(|s| s.text == text), "{text}");
+        }
+
+        let emphasis = format!("{}a{}", "*".repeat(20000), "*".repeat(20000));
+        let emphasis = Document::parse(&emphasis);
+        assert!(emphasis.search.iter().any(|s| s.text.contains('a')));
     }
 
     #[test]

@@ -76,6 +76,8 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
 pub fn spawn_load(sender: Sender<AppMsg>, cell: CtxCell, tab: u64, generation: u64, path: PathBuf) {
     std::thread::Builder::new()
         .name("load".into())
+        // comrak and the document builder recurse once per nesting level.
+        .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let result = load_file(&path);
             let _ = sender.send(AppMsg::Loaded {
