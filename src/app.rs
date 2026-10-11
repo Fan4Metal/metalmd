@@ -59,12 +59,15 @@ pub enum AppMsg {
 pub struct LoadError {
     pub message: String,
     pub not_found: bool,
+    /// The path is a folder, which Windows reports as "access denied".
+    pub is_dir: bool,
 }
 
 pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
     let decoded = fs_text::read_to_string_lossy(path).map_err(|e| LoadError {
         message: e.to_string(),
         not_found: e.kind() == std::io::ErrorKind::NotFound,
+        is_dir: path.is_dir(),
     })?;
     let doc = Document::parse(&decoded.content);
     Ok(Loaded {
@@ -500,7 +503,14 @@ impl App {
                         if tab.doc.is_some() {
                             tab.deleted = error.not_found;
                         } else {
-                            tab.error = Some(error.message);
+                            // Worded here: the first loads start before the
+                            // interface language is known.
+                            tab.error = Some(if error.is_dir {
+                                tr!("It is a folder, not a file.", "Это папка, а не файл.")
+                                    .to_owned()
+                            } else {
+                                error.message
+                            });
                             if error.not_found {
                                 let path = tab.path.clone();
                                 self.settings.remove_recent(&path);

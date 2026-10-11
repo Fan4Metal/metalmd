@@ -65,7 +65,13 @@ fn main() -> eframe::Result {
         }
     }
     let mut bench = bench_output.map(Bench::new);
-    let paths: Vec<PathBuf> = raw_paths.iter().map(|p| app::normalize_path(p)).collect();
+    // Each file once, as opening it again from the window would.
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for path in raw_paths.iter().map(|p| app::normalize_path(p)) {
+        if !paths.iter().any(|p| settings::same_path(p, &path)) {
+            paths.push(path);
+        }
+    }
 
     // A running instance takes the files; this process is done.
     let single = !new_instance && bench.is_none();
