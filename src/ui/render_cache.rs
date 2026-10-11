@@ -47,17 +47,20 @@ struct Job {
     scale: f32,
 }
 
-/// Entries kept at most, and bytes of their textures: past either, the
-/// ones drawn longest ago are dropped (made again if shown again).
-const MAX_ENTRIES: usize = 4096;
+/// Bytes of textures kept. Past this, pictures not asked for in the last
+/// [`MIN_IDLE`] seconds are dropped, those asked for longest ago first, and
+/// made again if shown again. Nothing asked for more recently goes: the
+/// pictures of blocks still being measured off screen are asked for only
+/// every few frames, and dropping them would have them made again forever.
 const MAX_BYTES: usize = 256 * 1024 * 1024;
+const MIN_IDLE: f64 = 30.0;
 
 struct Entry<M> {
     picture: Option<Arc<Picture<M>>>,
     /// Bytes of `picture`'s texture.
     bytes: usize,
-    /// The egui pass it was last asked for in.
-    last_used: u64,
+    /// When it was last asked for, in egui's seconds.
+    last_used: f64,
     /// The image made for `pending_scale`, not yet a texture.
     image: Option<(Rendered<M>, f32)>,
     /// A rendering at this scale is queued or done.
@@ -70,7 +73,7 @@ impl<M> Default for Entry<M> {
         Entry {
             picture: None,
             bytes: 0,
-            last_used: 0,
+            last_used: 0.0,
             image: None,
             pending_scale: None,
             error: None,
@@ -85,22 +88,21 @@ struct Cache<M> {
 }
 
 impl<M> Cache<M> {
-    /// Drops the entries asked for longest ago, down to three quarters of
-    /// the limits, if over one. Ones asked for in this pass or the last one
-    /// stay: they are on screen.
-    fn evict(&mut self, pass: u64) {
-        if self.entries.len() <= MAX_ENTRIES && self.bytes <= MAX_BYTES {
+    /// If over [`MAX_BYTES`], drops the pictures idle for [`MIN_IDLE`]
+    /// seconds, those asked for longest ago first, down to three quarters.
+    fn evict(&mut self, now: f64) {
+        if self.bytes <= MAX_BYTES {
             return;
         }
-        let mut by_age: Vec<(u64, Key)> = self
+        let mut by_age: Vec<(f64, Key)> = self
             .entries
             .iter()
-            .filter(|(_, e)| e.last_used + 1 < pass)
+            .filter(|(_, e)| e.bytes > 0 && now - e.last_used >= MIN_IDLE)
             .map(|(k, e)| (e.last_used, *k))
             .collect();
-        by_age.sort_unstable();
+        by_age.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
         for (_, key) in by_age {
-            if self.entries.len() <= MAX_ENTRIES * 3 / 4 && self.bytes <= MAX_BYTES * 3 / 4 {
+            if self.bytes <= MAX_BYTES * 3 / 4 {
                 break;
             }
             if let Some(entry) = self.entries.remove(&key) {
@@ -184,12 +186,11 @@ impl<M: Send + Sync + 'static> RenderCache<M> {
         let key = key(source, variant);
         // Small changes of scale (a resize by a few points) keep the texture.
         let scale = (scale * 32.0).round() / 32.0;
-        let pass = ctx.cumulative_pass_nr();
+        let now = ctx.input(|i| i.time);
         let mut guard = self.inner.cache.lock().expect("render cache lock");
         let cache = &mut *guard;
-        let added = !cache.entries.contains_key(&key);
         let entry = cache.entries.entry(key).or_default();
-        entry.last_used = pass;
+        entry.last_used = now;
         if let Some((rendered, at)) = entry.image.take() {
             let bytes = rendered.image.pixels.len() * 4;
             let texture =
@@ -208,8 +209,8 @@ impl<M: Send + Sync + 'static> RenderCache<M> {
         let picture = entry.picture.clone();
         let pending_scale = entry.pending_scale;
         entry.pending_scale = Some(scale);
-        if added || cache.bytes > MAX_BYTES {
-            cache.evict(pass);
+        if cache.bytes > MAX_BYTES {
+            cache.evict(now);
         }
         if pending_scale != Some(scale) {
             drop(guard);
@@ -334,12 +335,14 @@ pub fn rasterize(
 mod tests {
     use super::*;
 
-    fn cache(ages: impl Iterator<Item = (u64, usize)>) -> Cache<()> {
+    const MB64: usize = 64 * 1024 * 1024;
+
+    fn cache(entries: impl Iterator<Item = (f64, usize)>) -> Cache<()> {
         let mut cache = Cache {
             entries: HashMap::new(),
             bytes: 0,
         };
-        for (i, (last_used, bytes)) in ages.enumerate() {
+        for (i, (last_used, bytes)) in entries.enumerate() {
             let entry = Entry {
                 last_used,
                 bytes,
@@ -352,26 +355,25 @@ mod tests {
     }
 
     #[test]
-    fn the_entries_drawn_longest_ago_go_first() {
-        let mut cache = cache((0..5000).map(|i| (i, 0)));
-        cache.evict(10_000);
-        assert_eq!(cache.entries.len(), MAX_ENTRIES * 3 / 4);
-        assert!(cache.entries.values().all(|e| e.last_used >= 5000 - 3072));
+    fn idle_pictures_go_longest_idle_first_when_over_the_budget() {
+        // Ten 64 MB pictures, the last asked for at 0, 1, … 9 s.
+        let mut cache = cache((0..10).map(|i| (i as f64, MB64)));
+        cache.evict(100.0);
+        assert_eq!(cache.bytes, 3 * MB64);
+        assert!(cache.entries.values().all(|e| e.last_used >= 7.0));
     }
 
     #[test]
-    fn what_is_on_screen_stays_over_the_limit() {
-        // All drawn in this pass or the last one.
-        let mut cache = cache((0..5000).map(|i| (100 + i % 2, 0)));
-        cache.evict(101);
-        assert_eq!(cache.entries.len(), 5000);
+    fn recent_pictures_stay_even_over_the_budget() {
+        let mut cache = cache((0..10).map(|i| (i as f64, MB64)));
+        cache.evict(20.0);
+        assert_eq!(cache.entries.len(), 10);
     }
 
     #[test]
-    fn texture_bytes_count_too() {
-        let mut cache = cache((0..10).map(|i| (i, 64 * 1024 * 1024)));
-        cache.evict(100);
-        assert_eq!(cache.bytes, 3 * 64 * 1024 * 1024);
-        assert!(cache.entries.values().all(|e| e.last_used >= 7));
+    fn many_small_pictures_are_no_reason_to_drop_any() {
+        let mut cache = cache((0..20_000).map(|_| (0.0, 4096)));
+        cache.evict(1000.0);
+        assert_eq!(cache.entries.len(), 20_000);
     }
 }

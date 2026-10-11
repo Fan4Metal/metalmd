@@ -49,7 +49,9 @@ type RepaintFn = Arc<dyn Fn() + Send + Sync>;
 
 /// Code blocks whose colors are kept at most. Live reload adds an entry for
 /// each edit of a block, so past this the ones asked for longest ago go.
-const MAX_ENTRIES: usize = 4096;
+/// Far above what one document has: a code block's height does not wait
+/// for its colors, but one shown again is highlighted again.
+const MAX_ENTRIES: usize = 16384;
 
 /// The entries with the request count each was last asked for at.
 #[derive(Default)]
@@ -254,12 +256,14 @@ mod tests {
     #[test]
     fn the_blocks_asked_for_longest_ago_go_first() {
         let mut cache = Cache::default();
-        for i in 0..5000u64 {
+        let total = MAX_ENTRIES as u64 + 1000;
+        for i in 0..total {
             cache.entries.insert((i, false), (Entry::Pending, i));
         }
         cache.evict();
-        assert_eq!(cache.entries.len(), MAX_ENTRIES * 3 / 4);
-        assert!(cache.entries.values().all(|(_, at)| *at >= 5000 - 3072));
+        let kept = (MAX_ENTRIES * 3 / 4) as u64;
+        assert_eq!(cache.entries.len() as u64, kept);
+        assert!(cache.entries.values().all(|(_, at)| *at >= total - kept));
     }
 
     #[test]
