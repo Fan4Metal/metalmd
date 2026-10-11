@@ -120,6 +120,32 @@ pub fn toc_side_menu(response: &Response, side: &mut TocSide) -> bool {
     *side != before
 }
 
+/// Opens files: the outline of a folder, its tab on the top left.
+pub fn open_button(ui: &mut Ui) -> Response {
+    use egui::{Stroke, pos2};
+    icon_button(
+        ui,
+        "open_icon",
+        false,
+        tr!("Open file (Ctrl+O)", "Открыть файл (Ctrl+O)"),
+        |painter, c, color, _| {
+            let points = [
+                (-6.5, 5.0),
+                (-6.5, -5.0),
+                (-2.0, -5.0),
+                (-0.5, -3.0),
+                (6.5, -3.0),
+                (6.5, 5.0),
+            ]
+            .map(|(x, y)| pos2(c.x + x, c.y + y));
+            painter.add(egui::epaint::PathShape::closed_line(
+                points.to_vec(),
+                Stroke::new(1.3, color),
+            ));
+        },
+    )
+}
+
 /// Opens the About window: an "i" in a circle.
 pub fn about_button(ui: &mut Ui) -> Response {
     use egui::{Stroke, vec2};

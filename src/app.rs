@@ -819,11 +819,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     // File actions first, where opening one adds its tab.
-                    if ui
-                        .button(RichText::new(tr!("Open", "Открыть")).size(13.0))
-                        .on_hover_text(tr!("Open file (Ctrl+O)", "Открыть файл (Ctrl+O)"))
-                        .clicked()
-                    {
+                    if crate::ui::open_button(ui).clicked() {
                         open_dialog = true;
                     }
                     ui.separator();
