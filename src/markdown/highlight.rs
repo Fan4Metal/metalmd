@@ -24,6 +24,11 @@ pub type Highlights = Arc<Vec<HlSpan>>;
 
 /// Code larger than this is shown without colors.
 const MAX_HIGHLIGHT_BYTES: usize = 256 * 1024;
+/// Colors stop at a line longer than this, or after this long on one
+/// block, and the rest is plain: some grammars take minutes on a long
+/// line, and one block would hold up all the others behind it.
+const MAX_LINE_BYTES: usize = 10_000;
+const MAX_BLOCK_TIME: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The cache key of a code block: its language and text. Computed once when
 /// the document is parsed.
@@ -216,10 +221,14 @@ fn highlight(
     use syntect::highlighting::FontStyle;
     use syntect::util::LinesWithEndings;
 
+    let started = std::time::Instant::now();
     let mut lines = HighlightLines::new(syntax, theme);
     let mut spans: Vec<HlSpan> = Vec::new();
     let mut offset = 0usize;
     for line in LinesWithEndings::from(code) {
+        if line.len() > MAX_LINE_BYTES || started.elapsed() > MAX_BLOCK_TIME {
+            break;
+        }
         let Ok(ranges) = lines.highlight_line(line, syntaxes) else {
             return Vec::new();
         };
@@ -264,6 +273,27 @@ mod tests {
         let kept = (MAX_ENTRIES * 3 / 4) as u64;
         assert_eq!(cache.entries.len() as u64, kept);
         assert!(cache.entries.values().all(|(_, at)| *at >= total - kept));
+    }
+
+    #[test]
+    fn colors_stop_at_a_very_long_line_and_in_time() {
+        let syntaxes = two_face::syntax::extra_newlines();
+        let themes = two_face::theme::extra();
+        let theme = themes.get(two_face::theme::EmbeddedThemeName::Github);
+        let rust = syntaxes.find_syntax_by_token("rust").unwrap();
+        let code = format!(
+            "let a = 1;\n{}\nlet b = 2;\n",
+            "x".repeat(MAX_LINE_BYTES + 1)
+        );
+        let spans = highlight(&syntaxes, rust, theme, &code);
+        let end = spans.last().unwrap().range.end;
+        assert_eq!(end, "let a = 1;\n".len(), "colors up to the long line");
+
+        // The vim grammar took minutes on this one line.
+        let vim = syntaxes.find_syntax_by_token("vim").unwrap();
+        let started = Instant::now();
+        highlight(&syntaxes, vim, theme, &"/*".repeat(100_000));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
