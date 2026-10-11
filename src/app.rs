@@ -210,6 +210,8 @@ pub struct App {
     refresh_caption: bool,
     /// When the window last moved or changed size, until that is saved.
     window_moved: Option<Instant>,
+    /// Ctrl+wheel notches not yet turned into zoom steps.
+    wheel_zoom: f32,
 }
 
 impl App {
@@ -317,6 +319,7 @@ impl App {
             shown_theme: None,
             refresh_caption: false,
             window_moved: None,
+            wheel_zoom: 0.0,
         }
     }
 
@@ -699,6 +702,45 @@ impl App {
         }
     }
 
+    /// Ctrl+wheel zooms by Ctrl+= and Ctrl+−'s 10 % a notch, as browsers do.
+    /// egui turns the wheel into a smooth `zoom_delta` instead, but every
+    /// change of zoom measures the blocks and draws the pictures anew.
+    /// Touchpads send fractions of a notch, which add up.
+    fn zoom_with_wheel(&mut self, ctx: &egui::Context) {
+        let (command, notches) = ctx.input(|i| {
+            let notches: f32 = i
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::MouseWheel {
+                        unit,
+                        delta,
+                        modifiers,
+                        ..
+                    } if modifiers.command => Some(match unit {
+                        egui::MouseWheelUnit::Point => delta.y / 50.0,
+                        egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => delta.y,
+                    }),
+                    _ => None,
+                })
+                .sum();
+            (i.modifiers.command, notches)
+        });
+        if !command {
+            self.wheel_zoom = 0.0;
+            return;
+        }
+        self.wheel_zoom += notches;
+        while self.wheel_zoom >= 1.0 {
+            self.wheel_zoom -= 1.0;
+            egui::gui_zoom::zoom_in(ctx);
+        }
+        while self.wheel_zoom <= -1.0 {
+            self.wheel_zoom += 1.0;
+            egui::gui_zoom::zoom_out(ctx);
+        }
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
         let command_shift = |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
@@ -706,6 +748,7 @@ impl App {
         let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
         let consume = |shortcut: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&shortcut));
 
+        self.zoom_with_wheel(ctx);
         if consume(plain(Key::F1)) {
             self.about.toggle();
         }

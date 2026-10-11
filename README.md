@@ -83,7 +83,7 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | `Ctrl+Shift+O` | Show or hide the table of contents |
 | `F5`, `Ctrl+R` | Reload the file |
 | `Alt+←`, mouse Back button | Go back after following a link |
-| `Ctrl+=` / `Ctrl+−` / `Ctrl+0` | Zoom in, out, reset |
+| `Ctrl+=` / `Ctrl+−` / `Ctrl+0`, `Ctrl`+wheel | Zoom in, out, reset |
 | `PageUp`, `PageDown`, `Space` / `Shift+Space`, arrows | Scroll |
 | `Home`, `End` (`Ctrl+Home`, `Ctrl+End`) | Go to the start or the end |
 | `F1` | About |
