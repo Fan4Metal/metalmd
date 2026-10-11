@@ -392,15 +392,160 @@ fn in_code_region(regions: &[(usize, usize)], pos: usize) -> bool {
         .is_ok()
 }
 
+/// The code regions and the math between them, in document order: what
+/// the block-id rewrite must leave as it is (` ^T` ending a line of a
+/// formula is not a block id).
+fn code_and_math_ranges(content: &str) -> Vec<(usize, usize)> {
+    let code = code_region_ranges(content);
+    if !content.contains('$') {
+        return code;
+    }
+    let mut ranges = math_ranges(content, &code);
+    ranges.extend(code);
+    ranges.sort_unstable();
+    ranges
+}
+
+/// Byte ranges of `$…$` and `$$…$$` outside `code`, read as comrak's dollar
+/// math reads them: an opening `$` not followed by whitespace, a closing one
+/// not preceded by whitespace nor followed by a digit (`$5 and $6` is
+/// prose), both in one paragraph and with no code between them.
+///
+/// The closing delimiters are listed first and each opening one takes the
+/// next one, so a paragraph of unclosed `$` is not scanned again for each.
+fn math_ranges(content: &str, code: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let bytes = content.as_bytes();
+    let escaped = |at: usize| {
+        let backslashes = bytes[..at]
+            .iter()
+            .rev()
+            .take_while(|&&b| b == b'\\')
+            .count();
+        backslashes % 2 == 1
+    };
+    // The delimiters: unescaped `$` outside code, `$$` as one, by position
+    // and length.
+    let dollars: Vec<usize> = content
+        .match_indices('$')
+        .map(|(at, _)| at)
+        .filter(|&at| !in_code_region(code, at) && !escaped(at))
+        .collect();
+    let mut delimiters: Vec<(usize, usize)> = Vec::with_capacity(dollars.len());
+    let mut k = 0;
+    while k < dollars.len() {
+        if dollars.get(k + 1) == Some(&(dollars[k] + 1)) {
+            delimiters.push((dollars[k], 2));
+            k += 2;
+        } else {
+            delimiters.push((dollars[k], 1));
+            k += 1;
+        }
+    }
+    if delimiters.len() < 2 {
+        return Vec::new();
+    }
+
+    // Where paragraphs end: the line end before each blank line.
+    let mut blank_lines = Vec::new();
+    let mut previous_end = None;
+    let mut offset = 0;
+    for line in content.split_inclusive('\n') {
+        if let Some(end) = previous_end
+            && line.trim().is_empty()
+        {
+            blank_lines.push(end);
+        }
+        offset += line.len();
+        previous_end = Some(offset - 1);
+    }
+    let paragraph_end = |at: usize| {
+        let i = blank_lines.partition_point(|&b| b < at);
+        blank_lines.get(i).copied().unwrap_or(content.len())
+    };
+    let next_code = |at: usize| {
+        let i = code.partition_point(|&(start, _)| start < at);
+        code.get(i).map_or(content.len(), |&(start, _)| start)
+    };
+
+    let doubles: Vec<usize> = delimiters
+        .iter()
+        .filter(|&&(_, len)| len == 2)
+        .map(|&(at, _)| at)
+        .collect();
+    let closers: Vec<usize> = delimiters
+        .iter()
+        .filter(|&&(at, len)| {
+            let after_space = content[..at]
+                .chars()
+                .next_back()
+                .is_none_or(char::is_whitespace);
+            let before_digit = bytes.get(at + 1).is_some_and(u8::is_ascii_digit);
+            len == 1 && !after_space && !before_digit
+        })
+        .map(|&(at, _)| at)
+        .collect();
+
+    let mut ranges = Vec::new();
+    let (mut d, mut c) = (0, 0);
+    let mut done_to = 0;
+    for &(at, len) in &delimiters {
+        if at < done_to {
+            continue;
+        }
+        let limit = paragraph_end(at).min(next_code(at));
+        if len == 2 {
+            while d < doubles.len() && doubles[d] <= at {
+                d += 1;
+            }
+            if let Some(&close) = doubles.get(d)
+                && close < limit
+            {
+                ranges.push((at, close + 2));
+                done_to = close + 2;
+            }
+            continue;
+        }
+        let opens = content[at + 1..]
+            .chars()
+            .next()
+            .is_some_and(|ch| !ch.is_whitespace());
+        if opens {
+            while c < closers.len() && closers[c] <= at {
+                c += 1;
+            }
+            if let Some(&close) = closers.get(c)
+                && close < limit
+            {
+                ranges.push((at, close + 1));
+                done_to = close + 1;
+            }
+        }
+    }
+    ranges
+}
+
 fn replace_outside_code<'a>(
     content: &'a str,
     re: &Regex,
+    f: impl FnMut(&Captures) -> String,
+) -> Cow<'a, str> {
+    replace_outside(content, re, code_region_ranges, f)
+}
+
+/// Replaces the matches of `re` that do not start in one of the ranges
+/// `protected` finds. Those are found at the first match: most documents
+/// have none.
+fn replace_outside<'a>(
+    content: &'a str,
+    re: &Regex,
+    protected: fn(&str) -> Vec<(usize, usize)>,
     mut f: impl FnMut(&Captures) -> String,
 ) -> Cow<'a, str> {
-    let regions = code_region_ranges(content);
+    let mut regions = None;
     re.replace_all(content, |caps: &Captures| {
         let full = caps.get(0).expect("group 0 always matches");
-        if in_code_region(&regions, full.start()) {
+        let regions = regions.get_or_insert_with(|| protected(content));
+        if in_code_region(regions, full.start()) {
             full.as_str().to_string()
         } else {
             f(caps)
@@ -491,7 +636,7 @@ pub fn process_wikilinks(content: &str) -> Cow<'_, str> {
     }
 
     if processed.contains('^') && BLOCK_ID_RE.is_match(&processed) {
-        let replaced = replace_outside_code(&processed, &BLOCK_ID_RE, |caps| {
+        let replaced = replace_outside(&processed, &BLOCK_ID_RE, code_and_math_ranges, |caps| {
             let leading = caps.get(1).map(|m| m.as_str()).unwrap_or(" ");
             let id = caps.get(2).map(|m| m.as_str()).unwrap_or("");
             format!("{leading}<a id=\"{id}\" class=\"{BLOCK_ID_ANCHOR_CLASS}\"></a>")
@@ -940,6 +1085,47 @@ mod tests {
         );
         assert!(out.contains("<a id=\"own-line\""), "got: {out}");
         assert_eq!(out.lines().count(), 4);
+    }
+
+    #[test]
+    fn block_ids_are_not_read_in_math() {
+        let display = "$$\na ^b\n$$\n\nText ^real\n";
+        let out = process_wikilinks(display);
+        assert!(out.starts_with("$$\na ^b\n$$"), "{out}");
+        assert!(out.contains("<a id=\"real\""), "{out}");
+
+        let inline = "Transposed: $A\n^T$ and more ^id\n";
+        let out = process_wikilinks(inline);
+        assert!(out.contains("$A\n^T$"), "{out}");
+        assert!(out.contains("<a id=\"id\""), "{out}");
+
+        // Dollar amounts are prose, so a block id after them is one.
+        let prose = "Costs $5 and then $6 ^cost\n";
+        assert!(process_wikilinks(prose).contains("<a id=\"cost\""));
+    }
+
+    #[test]
+    fn math_ranges_follow_comrak() {
+        let ranges = |text: &str| -> Vec<String> {
+            math_ranges(text, &code_region_ranges(text))
+                .into_iter()
+                .map(|(a, b)| text[a..b].to_owned())
+                .collect()
+        };
+        assert_eq!(ranges("a $x$ b $$y$$ c"), ["$x$", "$$y$$"]);
+        assert_eq!(ranges("$5 and $6"), Vec::<String>::new());
+        assert_eq!(ranges("$ x$ and $x $"), Vec::<String>::new());
+        // The `$` after `x` is followed by a space, so it opens nothing.
+        assert_eq!(ranges(r"\$x$ and $y$"), ["$y$"]);
+        assert_eq!(
+            ranges("$a\n\nb$"),
+            Vec::<String>::new(),
+            "not across paragraphs"
+        );
+        assert_eq!(ranges("`$a` $b$"), ["$b$"], "not in code");
+        // Linear: a paragraph of unclosed dollars.
+        let many = "$5 ".repeat(200_000);
+        assert!(ranges(&many).is_empty());
     }
 
     #[test]
