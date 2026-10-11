@@ -156,7 +156,9 @@ def close_running_exe(exe: Path) -> None:
     so that it saves its settings, then by force after 3 seconds."""
     if not exe_locked(exe):
         return
-    query = f"(Get-Process metalmd -ErrorAction SilentlyContinue | Where-Object Path -eq '{exe}').Id"
+    # A ' in the path is written twice inside PowerShell's single quotes.
+    quoted = str(exe).replace("'", "''")
+    query = f"(Get-Process metalmd -ErrorAction SilentlyContinue | Where-Object Path -eq '{quoted}').Id"
     out = subprocess.run(["powershell", "-NoProfile", "-Command", query], capture_output=True, text=True)
     pids = out.stdout.split()
     for pid in pids:
