@@ -60,19 +60,33 @@ impl FileWatcher {
         })
     }
 
+    /// Watches `file`'s folder for one more open document. The folder is
+    /// watched anew even if it already was: a watch on a folder that was
+    /// deleted and made again (by git, by an editor) sees nothing, and
+    /// notify does not say so.
     pub fn watch(&mut self, file: &Path) {
         let Some(dir) = file.parent() else { return };
-        let count = self.dirs.entry(dir.to_path_buf()).or_insert(0);
-        if *count == 0
-            && self
-                .watcher
-                .watch(dir, RecursiveMode::NonRecursive)
-                .is_err()
-        {
-            self.dirs.remove(dir);
+        if !self.rewatch(dir) {
             return;
         }
-        *self.dirs.get_mut(dir).expect("just inserted") += 1;
+        *self.dirs.entry(dir.to_path_buf()).or_insert(0) += 1;
+    }
+
+    /// Watches `file`'s folder anew, for a reload asked for by hand: it may
+    /// be why the file seemed unchanged.
+    pub fn refresh(&mut self, file: &Path) {
+        let Some(dir) = file.parent() else { return };
+        if self.dirs.contains_key(dir) && !self.rewatch(dir) {
+            self.dirs.remove(dir);
+        }
+    }
+
+    /// Drops the folder's watch, if any, and makes a new one.
+    fn rewatch(&mut self, dir: &Path) -> bool {
+        if self.dirs.contains_key(dir) {
+            let _ = self.watcher.unwatch(dir);
+        }
+        self.watcher.watch(dir, RecursiveMode::NonRecursive).is_ok()
     }
 
     pub fn unwatch(&mut self, file: &Path) {

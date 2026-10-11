@@ -433,6 +433,15 @@ impl App {
         }
     }
 
+    /// A reload the reader asked for: the folder is watched anew too, as a
+    /// dead watch may be why the change was missed.
+    fn reload_by_hand(&mut self, index: usize) {
+        if let (Some(watcher), Some(tab)) = (self.watcher.as_mut(), self.tabs.get(index)) {
+            watcher.refresh(&tab.path);
+        }
+        self.reload(index);
+    }
+
     fn reload(&mut self, index: usize) {
         let tab = &mut self.tabs[index];
         tab.generation += 1;
@@ -737,7 +746,7 @@ impl App {
             self.settings_dirty = true;
         }
         if (consume(plain(Key::F5)) || consume(command(Key::R))) && self.active < self.tabs.len() {
-            self.reload(self.active);
+            self.reload_by_hand(self.active);
         }
         if self.find.open {
             if consume(plain(Key::F3)) {
@@ -1234,7 +1243,7 @@ impl eframe::App for App {
         if retry {
             self.tabs[self.active].error = None;
             self.tabs[self.active].loading = true;
-            self.reload(self.active);
+            self.reload_by_hand(self.active);
         }
         match home_action {
             Some(HomeAction::Open(path)) => self.open_paths(&ctx, vec![path], false),
