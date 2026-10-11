@@ -74,6 +74,9 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
     })
 }
 
+/// How long the window rests after a move or resize before it is saved.
+const WINDOW_SAVE_DELAY: Duration = Duration::from_secs(1);
+
 pub fn spawn_load(sender: Sender<AppMsg>, cell: CtxCell, tab: u64, generation: u64, path: PathBuf) {
     std::thread::Builder::new()
         .name("load".into())
@@ -203,6 +206,8 @@ pub struct App {
     shown_theme: Option<Theme>,
     /// Repaint the window caption on this frame.
     refresh_caption: bool,
+    /// When the window last moved or changed size, until that is saved.
+    window_moved: Option<Instant>,
 }
 
 impl App {
@@ -309,6 +314,7 @@ impl App {
             hwnd,
             shown_theme: None,
             refresh_caption: false,
+            window_moved: None,
         }
     }
 
@@ -1013,16 +1019,30 @@ impl App {
                     geometry.height = previous.height;
                 }
             }
-            if geometry.width > 100.0 && geometry.height > 100.0 {
+            if geometry.width > 100.0
+                && geometry.height > 100.0
+                && self.settings.window != Some(geometry)
+            {
                 self.settings.window = Some(geometry);
+                self.window_moved = Some(Instant::now());
+            }
+        }
+        // Saved once the window has rested for a second, not at every
+        // frame of a drag, and not only at exit, which a crash or a logoff
+        // may skip.
+        if let Some(moved) = self.window_moved {
+            if moved.elapsed() >= WINDOW_SAVE_DELAY {
+                self.window_moved = None;
+                self.settings_dirty = true;
+            } else {
+                ctx.request_repaint_after(WINDOW_SAVE_DELAY);
             }
         }
     }
 
     fn save_settings_if_needed(&mut self) {
         if std::mem::take(&mut self.settings_dirty) {
-            let settings = self.settings.clone();
-            std::thread::spawn(move || settings.save());
+            self.settings.save_in_background();
         }
     }
 }
