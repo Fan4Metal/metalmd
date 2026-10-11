@@ -959,14 +959,25 @@ fn rich_job(rich: &Rich, rc: &mut RenderCtx<'_>, ui: &Ui, size: f32, extra: Styl
                 .iter()
                 .position(|m| m.range.start < span.range.end && span.range.start < m.range.end)
                 .map(|k| Some(k) == current);
+            let source = &rich.text[span.range.clone()];
+            let copied = if !style.has(Style::MATH) {
+                source.to_owned()
+            } else if style.has(Style::DISPLAY) {
+                format!("$${source}$$")
+            } else {
+                format!("${source}$")
+            };
+            let placeholder = crate::ui::copy::placeholder(&copied);
+            let chars = placeholder.chars().count();
             pictures.push(InlinePicture {
-                char_index: char_bytes.len(),
+                // The space comes last, after the marker.
+                char_index: char_bytes.len() + chars - 1,
                 picture,
                 em,
                 found,
             });
-            job.append("\u{a0}", 0.0, format);
-            char_bytes.push(span.range.start);
+            job.append(&placeholder, 0.0, format);
+            char_bytes.extend(std::iter::repeat_n(span.range.start, chars));
             continue;
         }
         let mut format = text_format(rc, style, size);
