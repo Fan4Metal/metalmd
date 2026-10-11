@@ -30,6 +30,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 fn main() -> eframe::Result {
+    install_panic_hook();
     let mut bench_output = None;
     let mut new_instance = false;
     let mut raw_paths = Vec::new();
@@ -148,3 +149,50 @@ pub fn embedded_icon(size: u32) -> &'static [u8] {
         _ => include_bytes!(concat!(env!("OUT_DIR"), "/app_icon_256.rgba")),
     }
 }
+
+/// The release build aborts on a panic and has no console, so the window
+/// would vanish without a word: say what happened in a message box. The
+/// default hook still prints it (seen in a debug build). A stack overflow is
+/// not a panic and still ends the process silently.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default(info);
+        let text = tr!(
+            format!(
+                "MetalMD stopped because of an internal error.
+
+{info}"
+            ),
+            format!(
+                "MetalMD остановлен из-за внутренней ошибки.
+
+{info}"
+            )
+        );
+        error_box("MetalMD", &text);
+    }));
+}
+
+/// Shows `text` in a system message box with an error icon and waits until
+/// it is closed. It needs no window of the app, so it works from any thread
+/// and while the app is failing.
+#[cfg(windows)]
+fn error_box(title: &str, text: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MB_ICONERROR, MB_SETFOREGROUND, MessageBoxW,
+    };
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (text, title) = (wide(text), wide(title));
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_ICONERROR | MB_SETFOREGROUND,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn error_box(_title: &str, _text: &str) {}
