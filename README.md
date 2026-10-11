@@ -29,7 +29,7 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 - **Formulas**: `$…$` and `$$…$$` are typeset as KaTeX does it, by [RaTeX](https://github.com/erweixin/RaTeX), a port of KaTeX to Rust.
 - **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
 - **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` and other tags common in READMEs.
-- **Table of contents**: it highlights the current section, and a click jumps to a heading.
+- **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
 - **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window.
 - **Live reload**: a file changed on disk is reloaded at the same scroll position.
 - **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied.
@@ -51,9 +51,9 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 | Diagrams | ```` ```mermaid ```` blocks: the diagram types of [mermaid-svg](https://github.com/xmiksay/mermaid) |
 | Code blocks | highlighted with [syntect](https://github.com/trishume/syntect) and the grammars of [two-face](https://github.com/CosmicHorrorDev/two-face) |
 | Images | PNG, JPEG, GIF, WebP, SVG and BMP, local or over http(s) |
-| HTML | `<img>`, `<a>`, `<br>`, `<p align="center">`, `<b>`, `<i>`, `<kbd>`, `<sub>`, `<sup>`, `<mark>`, `<details>` |
+| HTML | `<img>`, `<a>`, `<br>`, `<p align="center">`, `<b>`, `<i>`, `<kbd>`, `<sub>`, `<sup>`, `<mark>`, `<details>` (always open) |
 
-The following is **not** supported. Video, audio and YouTube previews are not shown. Markpad's extra alert types (`[!TODO]` and others), foldable alerts, `data:` images and HTML beyond the tags above are not supported either.
+The following is **not** supported. Video, audio and YouTube previews are not shown. Markpad's extra alert types (`[!TODO]` and others), foldable alerts and `<details>`, `data:` images and HTML beyond the tags above are not supported either.
 
 ## Installation
 
@@ -90,7 +90,7 @@ Each file opens in a tab. If MetalMD is already running, it receives the files a
 
 Links to other Markdown files (`.md`, `.markdown`, `.mdown`, `.mkd`, `.txt`) open in a new tab, at the heading or block named after `#`. `#anchor` links scroll the document. Other links open in the default program.
 
-The theme, zoom, table of contents visibility, window position and size, and the last nine files are saved between runs.
+The theme, zoom, interface language, the table of contents' visibility and side, window position and size, and the last nine files are saved between runs.
 
 The program does not access the network, except to load images that a document links over http(s).
 
@@ -141,14 +141,21 @@ cargo test
 ```
 build.rs               draws the icon: .ico for the exe, RGBA for the window and the start page
 build.py               release build that first closes a running exe
+.github/workflows/
+  release.yml          installer and portable zip on a vX.Y.Z tag
 tools/
   make_release.py      tests, release build, installer and portable zip in dist\
   setup.iss            Inno Setup installer, .md associations
+samples/               markdown-syntax.md, the dialect in one document (from Markpad)
+images/                the icon and the screenshot of this README
 src/
   icon.rs              the procedural icon (a page with the Markdown mark), shared with build.rs
-  main.rs              arguments, hand-off to a running window, early loading, eframe
+  main.rs              arguments, hand-off to a running window, early loading, eframe, panic message
   app.rs               tabs, messages from background threads, links, keys, panels
   bench.rs             --bench: start-up timestamps
+  caption.rs           the window caption in the app's theme
+  placement.rs         the restored window kept on a screen
+  i18n.rs              English and Russian strings, tr!
   fs_text.rs           reading and encoding detection (from Markpad)
   settings.rs          settings, recent files, portable mode
   single_instance.rs   one process per user: named pipe / local socket
@@ -158,9 +165,18 @@ src/
     preprocess.rs      wikilinks, embeds, block ids, comrak options (from Markpad)
     document.rs        comrak AST → a block model with styled text
     html.rs            HTML tokenizer for the README subset
+    emoji.rs           which characters are colour emoji (UTS #51)
     highlight.rs       code highlighting on a background thread
   ui/
     viewer.rs          virtualized document rendering
+    render_cache.rs    pictures made from text on a worker thread
+    math.rs            formulas: RaTeX, rasterized by resvg
+    diagram.rs         Mermaid diagrams: mermaid-svg, rasterized by resvg
+    emoji.rs           colour emoji from the system emoji font
+    copy.rs            copying formulas and emoji as their source
+    svg.rs             SVG images with text (README badges)
+    animation.rs       animated GIF, WebP and APNG
+    limit.rs           images larger than the GPU takes, made smaller
     toc.rs             table of contents
     find.rs            find bar
     home.rs            start page with the icon and recent files
@@ -198,6 +214,9 @@ MetalMD is built on these open-source projects:
 - [egui / eframe](https://github.com/emilk/egui): the user interface and the window;
 - [comrak](https://github.com/kivikakk/comrak): Markdown parsing;
 - [syntect](https://github.com/trishume/syntect) and [two-face](https://github.com/CosmicHorrorDev/two-face): code highlighting;
+- [RaTeX](https://github.com/erweixin/RaTeX) and the [KaTeX](https://katex.org) fonts: formulas;
+- [mermaid-svg](https://github.com/xmiksay/mermaid): Mermaid diagrams;
+- [resvg](https://github.com/linebender/resvg): drawing formulas, diagrams, emoji and SVG images;
 - [notify](https://github.com/notify-rs/notify): watching files for changes;
 - [Inno Setup](https://jrsoftware.org/isinfo.php): the installer.
 
