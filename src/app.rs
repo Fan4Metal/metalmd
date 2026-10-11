@@ -393,10 +393,38 @@ impl App {
         if let Some(watcher) = self.watcher.as_mut() {
             watcher.unwatch(&tab.path);
         }
+        self.forget_images(&tab);
         if self.active > index || self.active >= self.tabs.len() {
             self.active = self.active.saturating_sub(1);
         }
         self.find.invalidate();
+    }
+
+    /// Frees the images of a closed tab that no other tab shows: egui keeps
+    /// every image it has loaded, decoded and as a texture, until told.
+    fn forget_images(&self, closed: &Tab) {
+        let Some(ctx) = self.ctx_cell.get() else {
+            return;
+        };
+        if self.tabs.is_empty() {
+            ctx.forget_all_images();
+            return;
+        }
+        let uris = |tab: &Tab| -> Vec<String> {
+            let Some(doc) = tab.doc.as_ref() else {
+                return Vec::new();
+            };
+            doc.images
+                .iter()
+                .filter_map(|src| viewer::image_uri(src, tab.path.parent()))
+                .collect()
+        };
+        let kept: std::collections::HashSet<String> = self.tabs.iter().flat_map(uris).collect();
+        for uri in uris(closed) {
+            if !kept.contains(&uri) {
+                ctx.forget_image(&uri);
+            }
+        }
     }
 
     fn reload(&mut self, index: usize) {

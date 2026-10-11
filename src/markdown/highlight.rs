@@ -47,8 +47,36 @@ enum Entry {
 
 type RepaintFn = Arc<dyn Fn() + Send + Sync>;
 
+/// Code blocks whose colors are kept at most. Live reload adds an entry for
+/// each edit of a block, so past this the ones asked for longest ago go.
+const MAX_ENTRIES: usize = 4096;
+
+/// The entries with the request count each was last asked for at.
+#[derive(Default)]
+struct Cache {
+    entries: HashMap<(u64, bool), (Entry, u64)>,
+    requests: u64,
+}
+
+impl Cache {
+    /// Drops the entries asked for longest ago, down to three quarters of
+    /// the limit, if over it. The blocks on screen were asked for last.
+    fn evict(&mut self) {
+        if self.entries.len() <= MAX_ENTRIES {
+            return;
+        }
+        let mut by_age: Vec<(u64, (u64, bool))> =
+            self.entries.iter().map(|(k, (_, at))| (*at, *k)).collect();
+        by_age.sort_unstable();
+        let excess = self.entries.len() - MAX_ENTRIES * 3 / 4;
+        for (_, key) in by_age.into_iter().take(excess) {
+            self.entries.remove(&key);
+        }
+    }
+}
+
 struct Inner {
-    cache: Mutex<HashMap<(u64, bool), Entry>>,
+    cache: Mutex<Cache>,
     sender: Mutex<Option<Sender<Job>>>,
     repaint: RepaintFn,
 }
@@ -62,7 +90,7 @@ impl Highlighter {
     pub fn new(repaint: impl Fn() + Send + Sync + 'static) -> Highlighter {
         Highlighter {
             inner: Arc::new(Inner {
-                cache: Mutex::new(HashMap::new()),
+                cache: Mutex::new(Cache::default()),
                 sender: Mutex::new(None),
                 repaint: Arc::new(repaint),
             }),
@@ -98,11 +126,19 @@ impl Highlighter {
         let full_key = (key, dark);
         {
             let mut cache = self.inner.cache.lock().expect("highlighter lock");
-            match cache.get(&full_key) {
-                Some(Entry::Ready(highlights)) => return Some(Arc::clone(highlights)),
-                Some(Entry::Pending) => return None,
+            cache.requests += 1;
+            let now = cache.requests;
+            match cache.entries.get_mut(&full_key) {
+                Some((entry, at)) => {
+                    *at = now;
+                    return match entry {
+                        Entry::Ready(highlights) => Some(Arc::clone(highlights)),
+                        Entry::Pending => None,
+                    };
+                }
                 None => {
-                    cache.insert(full_key, Entry::Pending);
+                    cache.entries.insert(full_key, (Entry::Pending, now));
+                    cache.evict();
                 }
             }
         }
@@ -154,11 +190,16 @@ fn worker(receiver: Receiver<Job>, inner: Arc<Inner>) {
             }
             _ => Vec::new(),
         };
-        inner
+        // Unless dropped from the cache meanwhile.
+        if let Some((entry, _)) = inner
             .cache
             .lock()
             .expect("highlighter lock")
-            .insert(job.key, Entry::Ready(Arc::new(spans)));
+            .entries
+            .get_mut(&job.key)
+        {
+            *entry = Entry::Ready(Arc::new(spans));
+        }
         (inner.repaint)();
     }
 }
@@ -209,6 +250,17 @@ fn highlight(
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn the_blocks_asked_for_longest_ago_go_first() {
+        let mut cache = Cache::default();
+        for i in 0..5000u64 {
+            cache.entries.insert((i, false), (Entry::Pending, i));
+        }
+        cache.evict();
+        assert_eq!(cache.entries.len(), MAX_ENTRIES * 3 / 4);
+        assert!(cache.entries.values().all(|(_, at)| *at >= 5000 - 3072));
+    }
 
     #[test]
     fn highlights_arrive_from_the_worker_and_cover_the_code() {

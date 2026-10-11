@@ -210,6 +210,9 @@ pub struct Document {
     /// Anchor id → top-level block index (headings, footnotes, block ids).
     pub anchors: HashMap<String, usize>,
     pub search: Vec<SearchText>,
+    /// The `src` of every image, once each: what to forget when the
+    /// document is closed.
+    pub images: Vec<String>,
     pub has_code: bool,
     pub scripts: Scripts,
 }
@@ -243,6 +246,7 @@ impl Document {
             headings: builder.headings,
             anchors: builder.anchors,
             search: builder.search,
+            images: builder.images.into_iter().collect(),
             has_code: builder.has_code,
             scripts: detect_scripts(source),
         }
@@ -293,6 +297,7 @@ struct Builder {
     headings: Vec<HeadingEntry>,
     anchors: HashMap<String, usize>,
     search: Vec<SearchText>,
+    images: std::collections::BTreeSet<String>,
     has_code: bool,
     footnote_ix: HashMap<String, u32>,
     /// Alignment opened by an HTML block (`<p align="center">`) that is still
@@ -832,6 +837,7 @@ impl InlineCtx {
 
     fn push_image(&mut self, builder: &mut Builder, image: ImageRef) {
         self.flush(builder);
+        builder.images.insert(image.src.clone());
         self.parts.push(Inline::Image(image));
     }
 

@@ -47,8 +47,17 @@ struct Job {
     scale: f32,
 }
 
+/// Entries kept at most, and bytes of their textures: past either, the
+/// ones drawn longest ago are dropped (made again if shown again).
+const MAX_ENTRIES: usize = 4096;
+const MAX_BYTES: usize = 256 * 1024 * 1024;
+
 struct Entry<M> {
     picture: Option<Arc<Picture<M>>>,
+    /// Bytes of `picture`'s texture.
+    bytes: usize,
+    /// The egui pass it was last asked for in.
+    last_used: u64,
     /// The image made for `pending_scale`, not yet a texture.
     image: Option<(Rendered<M>, f32)>,
     /// A rendering at this scale is queued or done.
@@ -60,6 +69,8 @@ impl<M> Default for Entry<M> {
     fn default() -> Self {
         Entry {
             picture: None,
+            bytes: 0,
+            last_used: 0,
             image: None,
             pending_scale: None,
             error: None,
@@ -67,8 +78,40 @@ impl<M> Default for Entry<M> {
     }
 }
 
+struct Cache<M> {
+    entries: HashMap<Key, Entry<M>>,
+    /// The sum of the entries' `bytes`.
+    bytes: usize,
+}
+
+impl<M> Cache<M> {
+    /// Drops the entries asked for longest ago, down to three quarters of
+    /// the limits, if over one. Ones asked for in this pass or the last one
+    /// stay: they are on screen.
+    fn evict(&mut self, pass: u64) {
+        if self.entries.len() <= MAX_ENTRIES && self.bytes <= MAX_BYTES {
+            return;
+        }
+        let mut by_age: Vec<(u64, Key)> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| e.last_used + 1 < pass)
+            .map(|(k, e)| (e.last_used, *k))
+            .collect();
+        by_age.sort_unstable();
+        for (_, key) in by_age {
+            if self.entries.len() <= MAX_ENTRIES * 3 / 4 && self.bytes <= MAX_BYTES * 3 / 4 {
+                break;
+            }
+            if let Some(entry) = self.entries.remove(&key) {
+                self.bytes -= entry.bytes;
+            }
+        }
+    }
+}
+
 struct Inner<M> {
-    cache: Mutex<HashMap<Key, Entry<M>>>,
+    cache: Mutex<Cache<M>>,
     sender: Mutex<Option<Sender<Job>>>,
     repaint: Arc<dyn Fn() + Send + Sync>,
     render: RenderFn<M>,
@@ -98,7 +141,10 @@ impl<M: Send + Sync + 'static> RenderCache<M> {
     ) -> RenderCache<M> {
         RenderCache {
             inner: Arc::new(Inner {
-                cache: Mutex::new(HashMap::new()),
+                cache: Mutex::new(Cache {
+                    entries: HashMap::new(),
+                    bytes: 0,
+                }),
                 sender: Mutex::new(None),
                 repaint: Arc::new(repaint),
                 render,
@@ -129,7 +175,7 @@ impl<M: Send + Sync + 'static> RenderCache<M> {
     /// for one.
     pub fn peek(&self, source: &str, variant: u64) -> Option<Arc<Picture<M>>> {
         let cache = self.inner.cache.lock().expect("render cache lock");
-        cache.get(&key(source, variant))?.picture.clone()
+        cache.entries.get(&key(source, variant))?.picture.clone()
     }
 
     /// The picture of `source` in `variant`, its texture made at `scale` or
@@ -138,9 +184,14 @@ impl<M: Send + Sync + 'static> RenderCache<M> {
         let key = key(source, variant);
         // Small changes of scale (a resize by a few points) keep the texture.
         let scale = (scale * 32.0).round() / 32.0;
-        let mut cache = self.inner.cache.lock().expect("render cache lock");
-        let entry = cache.entry(key).or_default();
+        let pass = ctx.cumulative_pass_nr();
+        let mut guard = self.inner.cache.lock().expect("render cache lock");
+        let cache = &mut *guard;
+        let added = !cache.entries.contains_key(&key);
+        let entry = cache.entries.entry(key).or_default();
+        entry.last_used = pass;
         if let Some((rendered, at)) = entry.image.take() {
+            let bytes = rendered.image.pixels.len() * 4;
             let texture =
                 ctx.load_texture(self.inner.name, rendered.image, self.inner.texture_options);
             entry.picture = Some(Arc::new(Picture {
@@ -148,14 +199,20 @@ impl<M: Send + Sync + 'static> RenderCache<M> {
                 texture,
                 scale: at,
             }));
+            cache.bytes = cache.bytes - entry.bytes + bytes;
+            entry.bytes = bytes;
         }
         if let Some(error) = &entry.error {
             return State::Failed(Arc::clone(error));
         }
         let picture = entry.picture.clone();
-        if entry.pending_scale != Some(scale) {
-            entry.pending_scale = Some(scale);
-            drop(cache);
+        let pending_scale = entry.pending_scale;
+        entry.pending_scale = Some(scale);
+        if added || cache.bytes > MAX_BYTES {
+            cache.evict(pass);
+        }
+        if pending_scale != Some(scale) {
+            drop(guard);
             let _ = self.sender().send(Job {
                 key,
                 source: source.to_owned(),
@@ -182,6 +239,7 @@ fn worker<M>(receiver: Receiver<Job>, inner: Arc<Inner<M>>) {
             .cache
             .lock()
             .expect("render cache lock")
+            .entries
             .get(&job.key)
             .and_then(|e| e.pending_scale);
         if wanted != Some(job.scale) {
@@ -189,7 +247,10 @@ fn worker<M>(receiver: Receiver<Job>, inner: Arc<Inner<M>>) {
         }
         let result = (inner.render)(&job.source, job.key.1, job.scale);
         let mut cache = inner.cache.lock().expect("render cache lock");
-        let entry = cache.entry(job.key).or_default();
+        // Dropped from the cache while it was being made.
+        let Some(entry) = cache.entries.get_mut(&job.key) else {
+            continue;
+        };
         match result {
             Ok(rendered) => entry.image = Some((rendered, job.scale)),
             Err(error) => entry.error = Some(error.into()),
@@ -267,4 +328,50 @@ pub fn rasterize(
         [w as usize, h as usize],
         pixmap.data(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cache(ages: impl Iterator<Item = (u64, usize)>) -> Cache<()> {
+        let mut cache = Cache {
+            entries: HashMap::new(),
+            bytes: 0,
+        };
+        for (i, (last_used, bytes)) in ages.enumerate() {
+            let entry = Entry {
+                last_used,
+                bytes,
+                ..Entry::default()
+            };
+            cache.bytes += bytes;
+            cache.entries.insert((i as u64, 0), entry);
+        }
+        cache
+    }
+
+    #[test]
+    fn the_entries_drawn_longest_ago_go_first() {
+        let mut cache = cache((0..5000).map(|i| (i, 0)));
+        cache.evict(10_000);
+        assert_eq!(cache.entries.len(), MAX_ENTRIES * 3 / 4);
+        assert!(cache.entries.values().all(|e| e.last_used >= 5000 - 3072));
+    }
+
+    #[test]
+    fn what_is_on_screen_stays_over_the_limit() {
+        // All drawn in this pass or the last one.
+        let mut cache = cache((0..5000).map(|i| (100 + i % 2, 0)));
+        cache.evict(101);
+        assert_eq!(cache.entries.len(), 5000);
+    }
+
+    #[test]
+    fn texture_bytes_count_too() {
+        let mut cache = cache((0..10).map(|i| (i, 64 * 1024 * 1024)));
+        cache.evict(100);
+        assert_eq!(cache.bytes, 3 * 64 * 1024 * 1024);
+        assert!(cache.entries.values().all(|e| e.last_used >= 7));
+    }
 }
