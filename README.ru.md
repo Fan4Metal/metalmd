@@ -9,7 +9,8 @@
 <p align="center">
   <a href="https://github.com/Fan4Metal/metalmd/releases/latest"><img src="https://img.shields.io/github/v/release/Fan4Metal/metalmd?label=%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F" alt="Последняя версия"></a>
   <img src="https://img.shields.io/badge/Windows-10%2B-0078D6" alt="Windows 10 и новее">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Fan4Metal/metalmd?label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F" alt="Лицензия MIT"></a>
+  <img src="https://img.shields.io/badge/Rust-B7410E?logo=rust&logoColor=white" alt="Rust">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F-MIT-blue" alt="Лицензия MIT"></a>
 </p>
 
 <p align="center"><a href="README.md">English</a> | <b>Русский</b></p>
