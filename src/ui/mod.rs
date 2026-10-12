@@ -120,7 +120,8 @@ pub fn toc_side_menu(response: &Response, side: &mut TocSide) -> bool {
     *side != before
 }
 
-/// Opens files: the outline of a folder, its tab on the top left.
+/// Opens files: the outline of an open folder, its tab on the top left and
+/// its front flap leaning forward.
 pub fn open_button(ui: &mut Ui) -> Response {
     use egui::{Stroke, pos2};
     icon_button(
@@ -129,18 +130,29 @@ pub fn open_button(ui: &mut Ui) -> Response {
         false,
         tr!("Open file (Ctrl+O)", "Открыть файл (Ctrl+O)"),
         |painter, c, color, _| {
-            let points = [
-                (-6.5, 5.0),
-                (-6.5, -5.0),
-                (-2.0, -5.0),
-                (-0.5, -3.0),
-                (6.5, -3.0),
-                (6.5, 5.0),
-            ]
-            .map(|(x, y)| pos2(c.x + x, c.y + y));
+            let at = |points: &[(f32, f32)]| -> Vec<egui::Pos2> {
+                points
+                    .iter()
+                    .map(|&(x, y)| pos2(c.x + x, c.y + y))
+                    .collect()
+            };
+            let stroke = Stroke::new(1.3, color);
+            // The back with its tab, down to where the front flap starts.
+            painter.add(egui::epaint::PathShape::line(
+                at(&[
+                    (-6.5, 5.0),
+                    (-6.5, -5.0),
+                    (-2.0, -5.0),
+                    (-0.5, -3.0),
+                    (5.0, -3.0),
+                    (5.0, -0.5),
+                ]),
+                stroke,
+            ));
+            // The front flap, opened forward: a parallelogram leaning right.
             painter.add(egui::epaint::PathShape::closed_line(
-                points.to_vec(),
-                Stroke::new(1.3, color),
+                at(&[(-6.5, 5.0), (-3.5, -0.5), (7.0, -0.5), (4.5, 5.0)]),
+                stroke,
             ));
         },
     )
