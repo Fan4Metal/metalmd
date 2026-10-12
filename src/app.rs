@@ -1,4 +1,4 @@
-//! The application: tabs, background loading, input and panels.
+//! The application: windows, tabs, background loading, input and panels.
 
 use crate::bench::Bench;
 use crate::fs_text;
@@ -20,8 +20,10 @@ use crate::ui::viewer::Pictures;
 use crate::ui::viewer::{self, RenderCtx, ViewAction, ViewState};
 use crate::watcher::FileWatcher;
 use egui::{
-    Align, CentralPanel, Color32, FontData, FontDefinitions, Frame, Id, Key, KeyboardShortcut,
-    Layout, Margin, Modifiers, Panel, RichText, Sense, TextEdit, Theme, Ui, ViewportCommand,
+    Align, CentralPanel, Color32, CursorIcon, FontData, FontDefinitions, FontId, Frame, Id, Key,
+    KeyboardShortcut, LayerId, Layout, Margin, Modifiers, Order, Panel, PointerButton, Pos2, Rect,
+    RichText, Sense, Stroke, StrokeKind, TextEdit, Theme, Ui, Vec2, ViewportBuilder,
+    ViewportCommand, ViewportId, vec2,
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
@@ -79,6 +81,9 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
 
 /// Windows narrower than this, in points, show no table of contents.
 const TOC_MIN_WINDOW: f32 = 560.0;
+
+/// The smallest window, in points.
+const MIN_WINDOW_SIZE: [f32; 2] = [420.0, 300.0];
 
 /// How long the window rests after a move or resize before it is saved.
 const WINDOW_SAVE_DELAY: Duration = Duration::from_secs(1);
@@ -165,6 +170,130 @@ impl Tab {
     }
 }
 
+/// A window of the app with its tabs. The first one is the root viewport;
+/// a tab dragged out of a window gets a window of its own, an egui viewport
+/// that lives as long as the root does (when the root is closed while such
+/// windows exist, it takes one of them over instead, see `adopt_window`).
+struct Window {
+    /// Unique for the run; the viewport id is made from it.
+    id: u64,
+    viewport: ViewportId,
+    tabs: Vec<Tab>,
+    active: usize,
+    find: FindState,
+    find_jump: bool,
+    /// The caption shown.
+    title: String,
+    hwnd: Option<isize>,
+    /// Asks before a link starts a program or reaches another computer.
+    confirm: ConfirmOpen,
+    /// How a detached window is made; `None` for the root.
+    builder: Option<ViewportBuilder>,
+    /// Its viewport has been shown, so its native window exists.
+    shown: bool,
+    /// Its frame and its content on the screen, in points, from the last
+    /// frame it drew.
+    outer: Option<Rect>,
+    inner: Option<Rect>,
+    /// Where the first tab starts, from the window's left edge, so a
+    /// window made for a dragged tab puts that tab under the pointer.
+    tab_lead: f32,
+    /// Its close button was pressed (detached windows only).
+    close_requested: bool,
+}
+
+impl Window {
+    fn new(id: u64, builder: Option<ViewportBuilder>) -> Window {
+        let viewport = match builder {
+            None => ViewportId::ROOT,
+            Some(_) => ViewportId::from_hash_of(("metalmd-window", id)),
+        };
+        Window {
+            id,
+            viewport,
+            tabs: Vec::new(),
+            active: 0,
+            find: FindState::default(),
+            find_jump: false,
+            title: String::new(),
+            hwnd: None,
+            confirm: ConfirmOpen::default(),
+            builder,
+            shown: false,
+            outer: None,
+            inner: None,
+            tab_lead: 44.0,
+            close_requested: false,
+        }
+    }
+
+    fn is_root(&self) -> bool {
+        self.viewport == ViewportId::ROOT
+    }
+
+    fn active_tab(&self) -> Option<&Tab> {
+        self.tabs.get(self.active)
+    }
+
+    fn active_tab_mut(&mut self) -> Option<&mut Tab> {
+        self.tabs.get_mut(self.active)
+    }
+
+    fn tab_index(&self, id: u64) -> Option<usize> {
+        self.tabs.iter().position(|t| t.id == id)
+    }
+
+    /// Takes tab `index` out, keeping the active tab in range.
+    fn remove_tab(&mut self, index: usize) -> Tab {
+        let tab = self.tabs.remove(index);
+        if self.active > index || self.active >= self.tabs.len() {
+            self.active = self.active.saturating_sub(1);
+        }
+        self.find.invalidate();
+        tab
+    }
+
+    /// Puts `tab` at the end and shows it.
+    fn add_tab(&mut self, tab: Tab) {
+        self.tabs.push(tab);
+        self.active = self.tabs.len() - 1;
+        self.find.invalidate();
+    }
+
+    /// Moves tab `from` to position `to`, the active tab staying the same.
+    fn move_tab(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        if self.active == from {
+            self.active = to;
+        } else if from < self.active && self.active <= to {
+            self.active -= 1;
+        } else if to <= self.active && self.active < from {
+            self.active += 1;
+        }
+    }
+}
+
+/// A tab being dragged by its title.
+struct TabDrag {
+    /// The window it is in.
+    window: u64,
+    tab: u64,
+    /// The pointer's offset from the tab's top left corner.
+    grab: Vec2,
+    /// Where the pointer was last seen, on the screen in points.
+    screen_pos: Option<Pos2>,
+}
+
+/// What a tab's context menu asked for.
+enum TabMenu {
+    Detach(usize),
+    ToRoot(usize),
+}
+
 /// What `main` prepared before the window existed.
 pub struct Startup {
     /// Tabs whose loading has already started, with their ids.
@@ -178,9 +307,16 @@ pub struct Startup {
 }
 
 pub struct App {
-    tabs: Vec<Tab>,
-    active: usize,
+    /// The root window first, then the detached ones.
+    windows: Vec<Window>,
+    /// The window whose frame is being drawn.
+    current: usize,
+    /// The window that last had the focus: files handed over by another
+    /// launch open there.
+    focused: u64,
+    next_window_id: u64,
     next_id: u64,
+    drag: Option<TabDrag>,
     sender: Sender<AppMsg>,
     receiver: Receiver<AppMsg>,
     ctx_cell: CtxCell,
@@ -192,21 +328,16 @@ pub struct App {
     fonts: FontChoice,
     fonts_generation: u64,
     fallback_scripts: Scripts,
-    find: FindState,
-    find_jump: bool,
     watcher: Option<FileWatcher>,
     frame: u64,
     bench: Option<Bench>,
-    title: String,
     about: About,
-    /// Asks before a link starts a program or reaches another computer.
-    confirm: ConfirmOpen,
+    /// The window About was opened from.
+    about_window: u64,
     start_icon: Option<egui::TextureHandle>,
-    /// The window, for its caption (see `follow_theme`).
-    hwnd: Option<isize>,
     /// The theme of the last frame.
     shown_theme: Option<Theme>,
-    /// Repaint the window caption on this frame.
+    /// Repaint the window captions on this frame.
     refresh_caption: bool,
     /// When the window last moved or changed size, until that is saved.
     window_moved: Option<Instant>,
@@ -284,17 +415,23 @@ impl App {
             .map(|(id, _)| *id + 1)
             .max()
             .unwrap_or(1);
-        let tabs: Vec<Tab> = startup
+        let mut root = Window::new(0, None);
+        root.hwnd = hwnd;
+        root.shown = true;
+        root.tabs = startup
             .tabs
             .into_iter()
             .map(|(id, path)| Tab::new(id, path))
             .collect();
-        let active = tabs.len().saturating_sub(1);
+        root.active = root.tabs.len().saturating_sub(1);
 
         App {
-            tabs,
-            active,
+            windows: vec![root],
+            current: 0,
+            focused: 0,
+            next_window_id: 1,
             next_id,
+            drag: None,
             sender: startup.sender,
             receiver: startup.receiver,
             ctx_cell: startup.ctx_cell,
@@ -306,16 +443,12 @@ impl App {
             fonts,
             fonts_generation: 0,
             fallback_scripts: Scripts::default(),
-            find: FindState::default(),
-            find_jump: false,
             watcher: None,
             frame: 0,
             bench,
-            title: String::new(),
             about: About::default(),
-            confirm: ConfirmOpen::default(),
+            about_window: 0,
             start_icon: None,
-            hwnd,
             shown_theme: None,
             refresh_caption: false,
             window_moved: None,
@@ -323,7 +456,28 @@ impl App {
         }
     }
 
-    /// Bring the window caption in line with the theme. egui passes a new
+    /// The window being drawn.
+    fn win(&mut self) -> &mut Window {
+        &mut self.windows[self.current]
+    }
+
+    fn window_index(&self, id: u64) -> Option<usize> {
+        self.windows.iter().position(|w| w.id == id)
+    }
+
+    /// The window and position of tab `id`.
+    fn find_tab(&self, id: u64) -> Option<(usize, usize)> {
+        self.windows
+            .iter()
+            .enumerate()
+            .find_map(|(w, window)| window.tab_index(id).map(|t| (w, t)))
+    }
+
+    fn all_tabs(&self) -> impl Iterator<Item = &Tab> {
+        self.windows.iter().flat_map(|w| w.tabs.iter())
+    }
+
+    /// Bring the window captions in line with the theme. egui passes a new
     /// theme to the window at the end of the frame it changed in, and
     /// Windows 10 shows it in the caption only at the next repaint of the
     /// frame, so the frame after the change sets the caption and asks for
@@ -331,11 +485,11 @@ impl App {
     /// the app follows it.
     fn follow_theme(&mut self, ctx: &egui::Context) {
         let theme = ctx.theme();
-        if std::mem::take(&mut self.refresh_caption)
-            && let Some(hwnd) = self.hwnd
-        {
-            crate::caption::set_dark(hwnd, theme == Theme::Dark);
-            crate::caption::refresh(hwnd);
+        if std::mem::take(&mut self.refresh_caption) {
+            for hwnd in self.windows.iter().filter_map(|w| w.hwnd) {
+                crate::caption::set_dark(hwnd, theme == Theme::Dark);
+                crate::caption::refresh(hwnd);
+            }
         }
         if self.shown_theme.is_some_and(|t| t != theme) {
             self.refresh_caption = true;
@@ -344,23 +498,59 @@ impl App {
         self.shown_theme = Some(theme);
     }
 
+    /// Finds the native windows of viewports shown for the first time, for
+    /// their captions. eframe gives no handle for a child viewport, so they
+    /// are the visible top-level windows of this thread not seen before.
+    fn find_new_windows(&mut self, ctx: &egui::Context) {
+        if !self.windows.iter().any(|w| w.shown && w.hwnd.is_none()) {
+            return;
+        }
+        let known: Vec<isize> = self.windows.iter().filter_map(|w| w.hwnd).collect();
+        let mut fresh = crate::caption::thread_windows()
+            .into_iter()
+            .filter(|h| !known.contains(h));
+        let dark = ctx.theme() == Theme::Dark;
+        for window in self
+            .windows
+            .iter_mut()
+            .filter(|w| w.shown && w.hwnd.is_none())
+        {
+            let Some(hwnd) = fresh.next() else { break };
+            window.hwnd = Some(hwnd);
+            crate::caption::set_dark(hwnd, dark);
+            crate::caption::refresh(hwnd);
+        }
+    }
+
+    /// Opens `paths` in the current window.
     fn open_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>, focus_window: bool) {
         for path in paths {
             let (path, anchor) = (normalize_path(&path), None);
             self.open_path(path, anchor);
         }
         if focus_window {
-            ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(ViewportCommand::Focus);
+            let viewport = self.win().viewport;
+            ctx.send_viewport_cmd_to(viewport, ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd_to(viewport, ViewportCommand::Focus);
         }
     }
 
-    /// Opens `path` in a tab (or activates its tab) and scrolls to `anchor`.
+    /// Opens `path` in a tab of the current window (or activates its tab,
+    /// in whichever window it is) and scrolls to `anchor`.
     fn open_path(&mut self, path: PathBuf, anchor: Option<String>) {
-        if let Some(index) = self.tabs.iter().position(|t| same_path(&t.path, &path)) {
-            self.active = index;
+        let open = self.windows.iter().enumerate().find_map(|(w, window)| {
+            window
+                .tabs
+                .iter()
+                .position(|t| same_path(&t.path, &path))
+                .map(|t| (w, t))
+        });
+        if let Some((w, index)) = open {
+            let window = &mut self.windows[w];
+            window.active = index;
+            window.find.invalidate();
             if let Some(anchor) = anchor {
-                let tab = &mut self.tabs[index];
+                let tab = &mut window.tabs[index];
                 match tab
                     .doc
                     .as_ref()
@@ -369,6 +559,11 @@ impl App {
                     Some(block) => tab.view.jump_to(block, 8.0),
                     None => tab.pending_anchor = Some(anchor),
                 }
+            }
+            if w != self.current
+                && let Some(ctx) = self.ctx_cell.get()
+            {
+                ctx.send_viewport_cmd_to(window.viewport, ViewportCommand::Focus);
             }
             return;
         }
@@ -386,23 +581,23 @@ impl App {
         if let Some(watcher) = self.watcher.as_mut() {
             watcher.watch(&path);
         }
-        self.tabs.push(tab);
-        self.active = self.tabs.len() - 1;
+        self.win().add_tab(tab);
     }
 
     fn close_tab(&mut self, index: usize) {
-        if index >= self.tabs.len() {
+        if index >= self.win().tabs.len() {
             return;
         }
-        let tab = self.tabs.remove(index);
+        let tab = self.win().remove_tab(index);
+        self.drop_tab(tab);
+    }
+
+    /// Lets go of a tab taken out of its window.
+    fn drop_tab(&mut self, tab: Tab) {
         if let Some(watcher) = self.watcher.as_mut() {
             watcher.unwatch(&tab.path);
         }
         self.forget_images(&tab);
-        if self.active > index || self.active >= self.tabs.len() {
-            self.active = self.active.saturating_sub(1);
-        }
-        self.find.invalidate();
     }
 
     /// Frees the images of a closed tab that no other tab shows: egui keeps
@@ -411,7 +606,7 @@ impl App {
         let Some(ctx) = self.ctx_cell.get() else {
             return;
         };
-        if self.tabs.is_empty() {
+        if self.all_tabs().next().is_none() {
             ctx.forget_all_images();
             return;
         }
@@ -424,7 +619,7 @@ impl App {
                 .filter_map(|src| viewer::image_uri(src, tab.path.parent()))
                 .collect()
         };
-        let kept: std::collections::HashSet<String> = self.tabs.iter().flat_map(uris).collect();
+        let kept: std::collections::HashSet<String> = self.all_tabs().flat_map(uris).collect();
         for uri in uris(closed) {
             if !kept.contains(&uri) {
                 ctx.forget_image(&uri);
@@ -435,14 +630,17 @@ impl App {
     /// A reload the reader asked for: the folder is watched anew too, as a
     /// dead watch may be why the change was missed.
     fn reload_by_hand(&mut self, index: usize) {
-        if let (Some(watcher), Some(tab)) = (self.watcher.as_mut(), self.tabs.get(index)) {
+        let current = self.current;
+        if let (Some(watcher), Some(tab)) =
+            (self.watcher.as_mut(), self.windows[current].tabs.get(index))
+        {
             watcher.refresh(&tab.path);
         }
-        self.reload(index);
+        self.reload(current, index);
     }
 
-    fn reload(&mut self, index: usize) {
-        let tab = &mut self.tabs[index];
+    fn reload(&mut self, window: usize, index: usize) {
+        let tab = &mut self.windows[window].tabs[index];
         tab.generation += 1;
         tab.loading = tab.doc.is_none();
         if tab.restore.is_none() {
@@ -470,13 +668,13 @@ impl App {
                 generation,
                 result,
             } => {
-                let Some(index) = self.tabs.iter().position(|t| t.id == tab) else {
+                let Some((w, index)) = self.find_tab(tab) else {
                     return;
                 };
-                if self.tabs[index].generation != generation {
+                if self.windows[w].tabs[index].generation != generation {
                     return;
                 }
-                let tab = &mut self.tabs[index];
+                let tab = &mut self.windows[w].tabs[index];
                 tab.loading = false;
                 match result {
                     Ok(loaded) => {
@@ -496,9 +694,9 @@ impl App {
                         tab.error = None;
                         tab.deleted = false;
                         let path = tab.path.clone();
+                        self.windows[w].find.invalidate();
                         self.settings.add_recent(&path);
                         self.settings_dirty = true;
-                        self.find.invalidate();
                         self.request_fallback_fonts(scripts);
                         if has_code && self.frame > 1 {
                             self.highlighter.warm_up();
@@ -528,17 +726,24 @@ impl App {
                     }
                 }
             }
-            AppMsg::OpenPaths(paths) => self.open_paths(ctx, paths, true),
+            AppMsg::OpenPaths(paths) => {
+                // Into the window the reader used last.
+                let current = self.current;
+                self.current = self.window_index(self.focused).unwrap_or(0);
+                self.open_paths(ctx, paths, true);
+                self.current = current;
+            }
             AppMsg::FileChanged(path) => {
-                let indices: Vec<usize> = self
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, t)| same_path(&t.path, &path))
-                    .map(|(i, _)| i)
-                    .collect();
-                for index in indices {
-                    self.reload(index);
+                let mut changed = Vec::new();
+                for (w, window) in self.windows.iter().enumerate() {
+                    for (t, tab) in window.tabs.iter().enumerate() {
+                        if same_path(&tab.path, &path) {
+                            changed.push((w, t));
+                        }
+                    }
+                }
+                for (w, t) in changed {
+                    self.reload(w, t);
                 }
             }
             AppMsg::Fonts(extra) => {
@@ -575,7 +780,7 @@ impl App {
     /// with it rather than empty. Loading started before the window did.
     fn wait_for_first_document(&mut self, ctx: &egui::Context) {
         let deadline = Instant::now() + Duration::from_millis(1500);
-        while self.tabs.get(self.active).is_some_and(|t| t.loading) {
+        while self.windows[0].active_tab().is_some_and(|t| t.loading) {
             let left = deadline.saturating_duration_since(Instant::now());
             match self.receiver.recv_timeout(left) {
                 Ok(message) => self.handle_message(ctx, message),
@@ -591,14 +796,13 @@ impl App {
             let _ = sender.send(AppMsg::FileChanged(path));
             request_repaint(&cell);
         }) {
-            for tab in &self.tabs {
+            for tab in self.all_tabs() {
                 watcher.watch(&tab.path);
             }
             self.watcher = Some(watcher);
         }
         if self
-            .tabs
-            .iter()
+            .all_tabs()
             .any(|t| t.doc.as_ref().is_some_and(|d| d.has_code))
         {
             self.highlighter.warm_up();
@@ -609,7 +813,7 @@ impl App {
         let mut dialog = rfd::FileDialog::new()
             .add_filter("Markdown", &["md", "markdown", "mdown", "mkd", "txt"])
             .add_filter(tr!("All files", "Все файлы"), &["*"]);
-        if let Some(dir) = self.tabs.get(self.active).and_then(|t| t.path.parent()) {
+        if let Some(dir) = self.win().active_tab().and_then(|t| t.path.parent()) {
             dialog = dialog.set_directory(dir);
         }
         if let Some(paths) = dialog.pick_files() {
@@ -621,7 +825,7 @@ impl App {
         let ViewAction::OpenLink(target) = action;
         let target = target.trim().to_owned();
         if let Some(fragment) = target.strip_prefix('#') {
-            let Some(tab) = self.tabs.get_mut(self.active) else {
+            let Some(tab) = self.win().active_tab_mut() else {
                 return;
             };
             let Some(doc) = tab.doc.as_ref() else { return };
@@ -647,8 +851,8 @@ impl App {
         let path_part = path_part.split('?').next().unwrap_or(path_part);
         let decoded = percent_decode(path_part);
         let base = self
-            .tabs
-            .get(self.active)
+            .win()
+            .active_tab()
             .and_then(|t| t.path.parent().map(Path::to_path_buf));
         let candidate = Path::new(&decoded);
         let resolved = if candidate.is_absolute() {
@@ -669,9 +873,10 @@ impl App {
     /// Opens a link's target, or asks first if it may run something or
     /// reach another computer.
     fn open_link_target(&mut self, target: LinkTarget) {
-        let document = self.tabs.get(self.active).map(|t| t.path.as_path());
+        let window = self.win();
+        let document = window.active_tab().map(|t| t.path.as_path());
         match crate::ui::confirm::risk(&target, document) {
-            Some(risk) => self.confirm.ask(target, risk),
+            Some(risk) => window.confirm.ask(target, risk),
             None => self.open_target(target),
         }
     }
@@ -695,7 +900,7 @@ impl App {
     }
 
     fn go_back(&mut self) {
-        if let Some(tab) = self.tabs.get_mut(self.active)
+        if let Some(tab) = self.win().active_tab_mut()
             && let Some((block, offset)) = tab.back.pop()
         {
             tab.view.jump_to(block, offset);
@@ -741,6 +946,21 @@ impl App {
         }
     }
 
+    /// About is open in the current window.
+    fn about_here(&self) -> bool {
+        self.about.open && self.about_window == self.windows[self.current].id
+    }
+
+    fn toggle_about(&mut self) {
+        let id = self.win().id;
+        if self.about.open && self.about_window != id {
+            // Open in another window: bring it here.
+            self.about.open = false;
+        }
+        self.about.toggle();
+        self.about_window = id;
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
         let command_shift = |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
@@ -750,54 +970,61 @@ impl App {
 
         self.zoom_with_wheel(ctx);
         if consume(plain(Key::F1)) {
-            self.about.toggle();
+            self.toggle_about();
         }
         // A dialog takes the keyboard (Enter and Esc close it).
-        if self.about.open || self.confirm.is_open() {
+        if self.about_here() || self.win().confirm.is_open() {
             return;
         }
         if consume(command(Key::F)) {
-            if self.find.open {
-                self.find.request_focus = true;
+            let find = &mut self.win().find;
+            if find.open {
+                find.request_focus = true;
             } else {
-                self.find.open();
+                find.open();
             }
         }
         if consume(command(Key::O)) {
             self.open_dialog(ctx);
         }
-        if consume(command(Key::W)) && !self.tabs.is_empty() {
-            self.close_tab(self.active);
+        if consume(command(Key::W)) && !self.win().tabs.is_empty() {
+            let active = self.win().active;
+            self.close_tab(active);
         }
-        let tab_count = self.tabs.len();
+        let tab_count = self.win().tabs.len();
         if tab_count > 0 {
             if consume(command_shift(Key::Tab)) || consume(command(Key::PageUp)) {
-                self.active = (self.active + tab_count - 1) % tab_count;
-                self.find.invalidate();
+                let window = self.win();
+                window.active = (window.active + tab_count - 1) % tab_count;
+                window.find.invalidate();
             }
             if consume(command(Key::Tab)) || consume(command(Key::PageDown)) {
-                self.active = (self.active + 1) % tab_count;
-                self.find.invalidate();
+                let window = self.win();
+                window.active = (window.active + 1) % tab_count;
+                window.find.invalidate();
             }
         }
         if consume(command_shift(Key::O)) {
             self.settings.toc_visible = !self.settings.toc_visible;
             self.settings_dirty = true;
         }
-        if (consume(plain(Key::F5)) || consume(command(Key::R))) && self.active < self.tabs.len() {
-            self.reload_by_hand(self.active);
+        if (consume(plain(Key::F5)) || consume(command(Key::R))) && self.win().active < tab_count {
+            let active = self.win().active;
+            self.reload_by_hand(active);
         }
-        if self.find.open {
+        if self.win().find.open {
             if consume(plain(Key::F3)) {
-                self.find.step(true);
-                self.find_jump = true;
+                let window = self.win();
+                window.find.step(true);
+                window.find_jump = true;
             }
             if consume(shift(Key::F3)) {
-                self.find.step(false);
-                self.find_jump = true;
+                let window = self.win();
+                window.find.step(false);
+                window.find_jump = true;
             }
             if consume(plain(Key::Escape)) {
-                self.find.close();
+                self.win().find.close();
             }
         }
         if consume(KeyboardShortcut::new(Modifiers::ALT, Key::ArrowLeft))
@@ -810,7 +1037,7 @@ impl App {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let Some(tab) = self.win().active_tab_mut() else {
             return;
         };
         // Chromium's steps: 87.5 % of the view for a page, 40 px for a line.
@@ -852,13 +1079,17 @@ impl App {
         let mut activate = None;
         let mut close = None;
         let mut open_dialog = false;
-        Panel::top("tab-bar")
+        let mut menu_action = None;
+        let cur = self.current;
+        let (wid, is_root) = (self.windows[cur].id, self.windows[cur].is_root());
+        Panel::top(Id::new(("tab-bar", wid)))
             .frame(
                 Frame::new()
                     .fill(ui.visuals().extreme_bg_color)
                     .inner_margin(Margin::symmetric(8, 5)),
             )
             .show(ui, |ui| {
+                let bar = ui.max_rect();
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     // File actions first, where opening one adds its tab.
@@ -866,21 +1097,66 @@ impl App {
                         open_dialog = true;
                     }
                     ui.separator();
-                    for (i, tab) in self.tabs.iter().enumerate() {
-                        let selected = i == self.active;
+                    let tab_count = self.windows[cur].tabs.len();
+                    let active = self.windows[cur].active;
+                    let mut rects = Vec::with_capacity(tab_count);
+                    let mut drag_start = None;
+                    for i in 0..tab_count {
+                        let tab = &self.windows[cur].tabs[i];
+                        let (tab_id, path_text) = (tab.id, tab.path.display().to_string());
                         let mut title = RichText::new(&tab.title).size(13.5);
                         if tab.deleted {
                             title = title.strikethrough();
                         }
+                        // Under the tab's own id, so a drag follows the tab
+                        // when it is moved along the bar.
                         let response = ui
-                            .selectable_label(selected, title)
-                            .on_hover_text(tab.path.display().to_string());
+                            .push_id(tab_id, |ui| {
+                                ui.add(
+                                    egui::Button::selectable(i == active, title)
+                                        .sense(Sense::click_and_drag()),
+                                )
+                            })
+                            .inner
+                            .on_hover_text(path_text);
+                        rects.push(response.rect);
                         if response.clicked() {
                             activate = Some(i);
                         }
                         if response.middle_clicked() {
                             close = Some(i);
                         }
+                        if response.drag_started_by(PointerButton::Primary) {
+                            activate = Some(i);
+                            // Where the button went down, not where the
+                            // pointer is now that egui calls it a drag.
+                            let grab = ui
+                                .input(|i| i.pointer.press_origin())
+                                .map_or(Vec2::ZERO, |p| p - response.rect.min);
+                            drag_start = Some((tab_id, grab));
+                        }
+                        response.context_menu(|ui| {
+                            if tab_count > 1
+                                && ui
+                                    .button(tr!("Move to a new window", "В новое окно"))
+                                    .clicked()
+                            {
+                                menu_action = Some(TabMenu::Detach(i));
+                                ui.close();
+                            }
+                            if !is_root
+                                && ui
+                                    .button(tr!("Move to the main window", "В главное окно"))
+                                    .clicked()
+                            {
+                                menu_action = Some(TabMenu::ToRoot(i));
+                                ui.close();
+                            }
+                            if ui.button(tr!("Close", "Закрыть")).clicked() {
+                                close = Some(i);
+                                ui.close();
+                            }
+                        });
                         let close_button =
                             egui::Button::new(RichText::new("×").size(14.0).color(palette.muted))
                                 .frame(false)
@@ -894,10 +1170,22 @@ impl App {
                         }
                         ui.add_space(6.0);
                     }
+                    if let Some(first) = rects.first() {
+                        self.windows[cur].tab_lead = first.left() - bar.left();
+                    }
+                    if let Some((tab, grab)) = drag_start {
+                        self.drag = Some(TabDrag {
+                            window: wid,
+                            tab,
+                            grab,
+                            screen_pos: None,
+                        });
+                    }
+                    self.drag_along_bar(ui, palette, bar, &rects);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         if crate::ui::about_button(ui).clicked() {
-                            self.about.toggle();
+                            self.toggle_about();
                         }
                         let theme = self.settings.theme;
                         if crate::ui::theme_button(ui, theme).clicked() {
@@ -928,7 +1216,7 @@ impl App {
                         {
                             ui.ctx().set_zoom_factor(1.0);
                         }
-                        if let Some(tab) = self.tabs.get(self.active) {
+                        if let Some(tab) = self.windows[cur].active_tab() {
                             let mut status = Vec::new();
                             if tab.deleted {
                                 status.push(tr!("file deleted", "файл удалён").to_owned());
@@ -953,13 +1241,23 @@ impl App {
                 });
             });
         if let Some(i) = activate
-            && i != self.active
+            && i != self.win().active
         {
-            self.active = i;
-            self.find.invalidate();
+            let window = self.win();
+            window.active = i;
+            window.find.invalidate();
         }
         if let Some(i) = close {
             self.close_tab(i);
+        }
+        match menu_action {
+            Some(TabMenu::Detach(i)) => self.detach_tab(cur, i, None),
+            Some(TabMenu::ToRoot(i)) => {
+                self.move_tab_to_window(cur, i, 0);
+                let root = self.windows[0].viewport;
+                ui.ctx().send_viewport_cmd_to(root, ViewportCommand::Focus);
+            }
+            None => {}
         }
         if open_dialog {
             let ctx = ui.ctx().clone();
@@ -967,12 +1265,213 @@ impl App {
         }
     }
 
-    fn find_bar(&mut self, ui: &mut Ui, palette: &Palette) {
-        if !self.find.open {
+    /// While a tab of this window is dragged: along the bar it changes
+    /// places with its neighbours, away from it a ghost of its title
+    /// follows the pointer. `rects` are the tabs' places in the bar.
+    fn drag_along_bar(&mut self, ui: &mut Ui, palette: &Palette, bar: Rect, rects: &[Rect]) {
+        let cur = self.current;
+        let Some(drag) = self.drag.as_ref() else {
+            return;
+        };
+        if drag.window != self.windows[cur].id {
             return;
         }
-        let doc = self.tabs.get(self.active).and_then(|t| t.doc.clone());
-        Panel::top("find-bar")
+        let Some(from) = self.windows[cur].tab_index(drag.tab) else {
+            return;
+        };
+        let Some(pointer) = ui.ctx().pointer_latest_pos() else {
+            return;
+        };
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+        if bar.y_range().contains(pointer.y) {
+            // Its place is after every other tab whose middle is left of
+            // the pointer.
+            let to = rects
+                .iter()
+                .enumerate()
+                .filter(|(i, r)| *i != from && r.center().x < pointer.x)
+                .count();
+            self.windows[cur].move_tab(from, to);
+            return;
+        }
+        let title = self.windows[cur].tabs[from].title.clone();
+        let grab = drag.grab;
+        let painter = ui
+            .ctx()
+            .layer_painter(LayerId::new(Order::Tooltip, Id::new(("tab-drag", cur))));
+        let galley = painter.layout_no_wrap(title, FontId::proportional(13.5), palette.text);
+        let rect = Rect::from_min_size(pointer - grab, galley.size() + vec2(16.0, 8.0));
+        painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+        painter.rect_stroke(
+            rect,
+            4.0,
+            Stroke::new(1.0, palette.muted),
+            StrokeKind::Inside,
+        );
+        painter.galley(rect.min + vec2(8.0, 4.0), galley, palette.text);
+    }
+
+    /// Follows a drag of this window's tab until the button is released,
+    /// then drops the tab where the pointer is: into another window, or
+    /// into a new one when outside every window.
+    fn track_drag(&mut self, ctx: &egui::Context) {
+        let cur = self.current;
+        let Some(drag) = self.drag.as_mut() else {
+            return;
+        };
+        if drag.window != self.windows[cur].id {
+            return;
+        }
+        // The pointer on the screen: Windows keeps sending its position
+        // to the window the button went down in, even outside it.
+        let on_screen = ctx.input(|i| {
+            let pos = i.pointer.latest_pos()?;
+            let inner = i.viewport().inner_rect?;
+            Some(inner.min + pos.to_vec2())
+        });
+        if on_screen.is_some() {
+            drag.screen_pos = on_screen;
+        }
+        if ctx.input(|i| i.pointer.any_down()) {
+            ctx.request_repaint();
+            return;
+        }
+        let Some(drag) = self.drag.take() else { return };
+        let Some(from) = self.windows[cur].tab_index(drag.tab) else {
+            return;
+        };
+        let Some(pos) = drag.screen_pos else { return };
+        if self.windows[cur].outer.is_some_and(|r| r.contains(pos)) {
+            // Dropped in its own window: it was moved along the bar.
+            return;
+        }
+        let target = self
+            .windows
+            .iter()
+            .position(|w| w.id != drag.window && w.outer.is_some_and(|r| r.contains(pos)));
+        if let Some(to) = target {
+            self.move_tab_to_window(cur, from, to);
+            ctx.send_viewport_cmd_to(self.windows[to].viewport, ViewportCommand::Focus);
+        } else if self.windows[cur].tabs.len() > 1 {
+            self.detach_tab(cur, from, Some(pos - drag.grab));
+        }
+    }
+
+    /// Moves tab `index` of window `from` to the end of window `to`.
+    fn move_tab_to_window(&mut self, from: usize, index: usize, to: usize) {
+        if from == to || index >= self.windows[from].tabs.len() {
+            return;
+        }
+        let tab = self.windows[from].remove_tab(index);
+        self.windows[to].add_tab(tab);
+    }
+
+    /// Gives tab `index` of window `from` a window of its own, the size of
+    /// the one it leaves. With `tab_pos`, the top left corner of the tab
+    /// on the screen, the new window is placed so that the tab lies there;
+    /// otherwise it is offset from the window it leaves.
+    fn detach_tab(&mut self, from: usize, index: usize, tab_pos: Option<Pos2>) {
+        let source = &self.windows[from];
+        if index >= source.tabs.len() || source.tabs.len() < 2 {
+            return;
+        }
+        let size = source
+            .inner
+            .map(|r| r.size())
+            .unwrap_or(vec2(980.0, 780.0))
+            .max(MIN_WINDOW_SIZE.into());
+        // The window's frame: caption above the content, border left of it.
+        let frame = match (source.inner, source.outer) {
+            (Some(inner), Some(outer)) => inner.min - outer.min,
+            _ => vec2(8.0, 31.0),
+        };
+        let position = match tab_pos {
+            Some(tab) => tab - frame - vec2(source.tab_lead, 5.0),
+            None => source
+                .outer
+                .map_or(Pos2::new(100.0, 100.0), |o| o.min + vec2(40.0, 40.0)),
+        };
+        let id = self.next_window_id;
+        self.next_window_id += 1;
+        let builder = ViewportBuilder::default()
+            .with_title("MetalMD")
+            .with_inner_size(size)
+            .with_position(position)
+            .with_min_inner_size(MIN_WINDOW_SIZE)
+            .with_drag_and_drop(true)
+            .with_icon(crate::window_icon());
+        let mut window = Window::new(id, Some(builder));
+        let tab = self.windows[from].remove_tab(index);
+        window.add_tab(tab);
+        self.windows.push(window);
+        self.focused = id;
+    }
+
+    /// The root window was told to close while detached windows exist: its
+    /// tabs close, and it takes the place and the tabs of the window the
+    /// reader used last, which goes away. Child viewports cannot outlive
+    /// the root, so this keeps that window open as the reader expects.
+    fn adopt_window(&mut self, ctx: &egui::Context, root_maximized: bool) {
+        let child = self
+            .window_index(self.focused)
+            .filter(|&i| i != 0)
+            .unwrap_or(1);
+        let closed = std::mem::take(&mut self.windows[0].tabs);
+        for tab in closed {
+            self.drop_tab(tab);
+        }
+        let tabs = std::mem::take(&mut self.windows[child].tabs);
+        let active = self.windows[child].active;
+        let (outer, inner) = (self.windows[child].outer, self.windows[child].inner);
+        self.windows[child].close_requested = true;
+        let root = &mut self.windows[0];
+        root.tabs = tabs;
+        root.active = active;
+        root.find.invalidate();
+        self.focused = root.id;
+        if root_maximized {
+            ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
+        }
+        if let Some(outer) = outer {
+            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(outer.min));
+        }
+        if let Some(inner) = inner {
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(inner.size()));
+        }
+    }
+
+    /// Closes the detached windows whose button was pressed or that have
+    /// no tab left.
+    fn close_windows(&mut self) {
+        let mut i = 1;
+        while i < self.windows.len() {
+            if !self.windows[i].close_requested && !self.windows[i].tabs.is_empty() {
+                i += 1;
+                continue;
+            }
+            let window = self.windows.remove(i);
+            for tab in window.tabs {
+                self.drop_tab(tab);
+            }
+            if self.focused == window.id {
+                self.focused = self.windows[0].id;
+            }
+            if self.drag.as_ref().is_some_and(|d| d.window == window.id) {
+                self.drag = None;
+            }
+        }
+    }
+
+    fn find_bar(&mut self, ui: &mut Ui, palette: &Palette) {
+        let cur = self.current;
+        if !self.windows[cur].find.open {
+            return;
+        }
+        let wid = self.windows[cur].id;
+        let doc = self.windows[cur].active_tab().and_then(|t| t.doc.clone());
+        let find_bar = Id::new(("find-bar", wid));
+        let find_input = Id::new(("find-input", wid));
+        Panel::top(find_bar)
             .frame(
                 Frame::new()
                     .fill(ui.visuals().extreme_bg_color)
@@ -980,36 +1479,37 @@ impl App {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    let window = &mut self.windows[cur];
                     let input = ui.add(
-                        TextEdit::singleline(&mut self.find.query)
-                            .id(Id::new("find-input"))
+                        TextEdit::singleline(&mut window.find.query)
+                            .id(find_input)
                             .hint_text(tr!("Find in document", "Найти в документе"))
                             .desired_width(280.0),
                     );
-                    if self.find.request_focus {
+                    if window.find.request_focus {
                         input.request_focus();
-                        self.find.request_focus = false;
+                        window.find.request_focus = false;
                     }
                     if input.changed() {
-                        self.find.current = 0;
-                        self.find_jump = true;
+                        window.find.current = 0;
+                        window.find_jump = true;
                     }
                     if input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                         let forward = !ui.input(|i| i.modifiers.shift);
-                        self.find.step(forward);
-                        self.find_jump = true;
+                        window.find.step(forward);
+                        window.find_jump = true;
                         input.request_focus();
                     }
                     if let Some(doc) = doc.as_ref() {
-                        self.find.refresh(doc);
+                        window.find.refresh(doc);
                     }
-                    let count = self.find.matches.len();
-                    let status = if self.find.query.is_empty() {
+                    let count = window.find.matches.len();
+                    let status = if window.find.query.is_empty() {
                         String::new()
                     } else if count == 0 {
                         tr!("No results", "Не найдено").to_owned()
                     } else {
-                        let current = self.find.current + 1;
+                        let current = window.find.current + 1;
                         tr!(
                             format!("{current} of {count}"),
                             format!("{current} из {count}")
@@ -1021,23 +1521,23 @@ impl App {
                         .on_hover_text(tr!("Previous (Shift+F3)", "Предыдущее (Shift+F3)"))
                         .clicked()
                     {
-                        self.find.step(false);
-                        self.find_jump = true;
+                        window.find.step(false);
+                        window.find_jump = true;
                     }
                     if ui
                         .button("↓")
                         .on_hover_text(tr!("Next (F3, Enter)", "Следующее (F3, Enter)"))
                         .clicked()
                     {
-                        self.find.step(true);
-                        self.find_jump = true;
+                        window.find.step(true);
+                        window.find_jump = true;
                     }
                     if ui
                         .button("×")
                         .on_hover_text(tr!("Close (Esc)", "Закрыть (Esc)"))
                         .clicked()
                     {
-                        self.find.close();
+                        window.find.close();
                     }
                 });
             });
@@ -1045,15 +1545,17 @@ impl App {
 
     /// Scrolls the active tab to the current search match.
     fn jump_to_find_match(&mut self) {
-        if !std::mem::take(&mut self.find_jump) {
+        let window = self.win();
+        if !std::mem::take(&mut window.find_jump) {
             return;
         }
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let active = window.active;
+        let Some(tab) = window.tabs.get_mut(active) else {
             return;
         };
         let Some(doc) = tab.doc.as_ref() else { return };
-        self.find.refresh(doc);
-        let Some(m) = self.find.current_match() else {
+        window.find.refresh(doc);
+        let Some(m) = window.find.current_match() else {
             return;
         };
         let mut offset = tab.view.viewport_height * 0.3;
@@ -1067,13 +1569,14 @@ impl App {
     }
 
     fn update_title(&mut self, ctx: &egui::Context) {
-        let title = match self.tabs.get(self.active) {
+        let window = self.win();
+        let title = match window.active_tab() {
             Some(tab) => format!("{} — MetalMD", tab.title),
             None => "MetalMD".to_owned(),
         };
-        if title != self.title {
+        if title != window.title {
             ctx.send_viewport_cmd(ViewportCommand::Title(title.clone()));
-            self.title = title;
+            window.title = title;
         }
     }
 
@@ -1130,24 +1633,39 @@ impl App {
             self.settings.save_in_background();
         }
     }
-}
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    /// One frame of the current window.
+    fn window_ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
-        self.frame += 1;
-        if self.frame == 1 {
-            if let Some(b) = self.bench.as_mut() {
-                b.mark("first_frame_start");
+        let cur = self.current;
+        let (inner, outer, focused, close_requested, maximized) = ctx.input(|i| {
+            let v = i.viewport();
+            (
+                v.inner_rect,
+                v.outer_rect,
+                v.focused.unwrap_or(false),
+                v.close_requested(),
+                v.maximized.unwrap_or(false),
+            )
+        });
+        {
+            let window = &mut self.windows[cur];
+            window.inner = inner;
+            window.outer = outer;
+            if focused {
+                self.focused = window.id;
             }
-            // The fonts set in `new` are live now.
-            self.fonts.measure_ascents(&ctx);
-            self.wait_for_first_document(&ctx);
         }
-        if self.frame == 2 {
-            self.start_background_services();
+        if close_requested {
+            if cur == 0 {
+                if self.windows.len() > 1 {
+                    ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+                    self.adopt_window(&ctx, maximized);
+                }
+            } else {
+                self.windows[cur].close_requested = true;
+            }
         }
-        self.process_messages(&ctx);
 
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -1160,6 +1678,7 @@ impl eframe::App for App {
         if !dropped.is_empty() {
             self.open_paths(&ctx, dropped, false);
         }
+        self.track_drag(&ctx);
         self.handle_shortcuts(&ctx);
 
         let palette = Palette::new(ctx.theme() == Theme::Dark);
@@ -1167,20 +1686,22 @@ impl eframe::App for App {
         self.find_bar(ui, &palette);
         self.jump_to_find_match();
 
-        let active_doc = self.tabs.get(self.active).and_then(|t| t.doc.clone());
+        let wid = self.windows[cur].id;
+        let active_doc = self.windows[cur].active_tab().and_then(|t| t.doc.clone());
         // In a narrow window the contents take at most a third of it, and
         // none below `TOC_MIN_WINDOW`: the text needs the room more. The
         // setting stays, so a wider window shows them again.
         let window_width = ui.available_width();
         if self.settings.toc_visible
             && window_width >= TOC_MIN_WINDOW
-            && let (Some(doc), Some(tab)) = (active_doc.as_ref(), self.tabs.get_mut(self.active))
+            && let (Some(doc), Some(tab)) =
+                (active_doc.as_ref(), self.windows[cur].active_tab_mut())
             && !doc.headings.is_empty()
         {
             let widest = (window_width * 0.35).clamp(140.0, 480.0);
             let panel = match self.settings.toc_side {
-                TocSide::Left => Panel::left("toc"),
-                TocSide::Right => Panel::right("toc"),
+                TocSide::Left => Panel::left(Id::new(("toc", wid))),
+                TocSide::Right => Panel::right(Id::new(("toc", wid))),
             };
             panel
                 .resizable(true)
@@ -1193,8 +1714,11 @@ impl eframe::App for App {
                 )
                 .show(ui, |ui| {
                     // Right-clicking the panel outside the headings moves it.
-                    let background =
-                        ui.interact(ui.max_rect(), Id::new("toc-background"), Sense::click());
+                    let background = ui.interact(
+                        ui.max_rect(),
+                        Id::new(("toc-background", wid)),
+                        Sense::click(),
+                    );
                     if crate::ui::toc_side_menu(&background, &mut self.settings.toc_side) {
                         self.settings_dirty = true;
                     }
@@ -1211,9 +1735,13 @@ impl eframe::App for App {
         let mut actions = Vec::new();
         let mut home_action = None;
         let mut retry = false;
+        let Window {
+            tabs, active, find, ..
+        } = &mut self.windows[cur];
+        let active_tab = tabs.get_mut(*active);
         CentralPanel::no_frame()
             .frame(Frame::new().fill(ui.visuals().panel_fill))
-            .show(ui, |ui| match self.tabs.get_mut(self.active) {
+            .show(ui, |ui| match active_tab {
                 None => {
                     home_action =
                         home::show(ui, &self.settings.recent, &palette, &mut self.start_icon)
@@ -1228,7 +1756,7 @@ impl eframe::App for App {
                             &self.highlighter,
                             &self.pictures,
                             base_dir.as_deref(),
-                            &self.find,
+                            find,
                         );
                         viewer::show_document(
                             ui,
@@ -1264,21 +1792,25 @@ impl eframe::App for App {
                     }
                 }
             });
-        let lang = self.settings.language;
-        self.about.show(&ctx, &mut self.settings.language);
-        if let Some(target) = self.confirm.show(&ctx) {
-            self.open_target(target);
+        if self.about_here() {
+            let lang = self.settings.language;
+            self.about.show(&ctx, &mut self.settings.language);
+            if self.settings.language != lang {
+                self.settings_dirty = true;
+            }
         }
-        if self.settings.language != lang {
-            self.settings_dirty = true;
+        if let Some(target) = self.windows[cur].confirm.show(&ctx) {
+            self.open_target(target);
         }
         for action in actions {
             self.handle_action(&ctx, action);
         }
         if retry {
-            self.tabs[self.active].error = None;
-            self.tabs[self.active].loading = true;
-            self.reload_by_hand(self.active);
+            let window = self.win();
+            let active = window.active;
+            window.tabs[active].error = None;
+            window.tabs[active].loading = true;
+            self.reload_by_hand(active);
         }
         match home_action {
             Some(HomeAction::Open(path)) => self.open_paths(&ctx, vec![path], false),
@@ -1290,9 +1822,9 @@ impl eframe::App for App {
         }
 
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
-            let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                Id::new("drop-overlay"),
+            let painter = ctx.layer_painter(LayerId::new(
+                Order::Foreground,
+                Id::new(("drop-overlay", wid)),
             ));
             let rect = ctx.content_rect();
             painter.rect_filled(rect, 0.0, Color32::from_black_alpha(120));
@@ -1300,12 +1832,49 @@ impl eframe::App for App {
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 tr!("Drop to open", "Отпустите, чтобы открыть"),
-                egui::FontId::proportional(26.0),
+                FontId::proportional(26.0),
                 Color32::WHITE,
             );
         }
 
         self.update_title(&ctx);
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.frame += 1;
+        if self.frame == 1 {
+            if let Some(b) = self.bench.as_mut() {
+                b.mark("first_frame_start");
+            }
+            // The fonts set in `new` are live now.
+            self.fonts.measure_ascents(&ctx);
+            self.wait_for_first_document(&ctx);
+        }
+        if self.frame == 2 {
+            self.start_background_services();
+        }
+        self.process_messages(&ctx);
+
+        self.current = 0;
+        self.window_ui(ui);
+        // The detached windows, each in a viewport of its own. A window
+        // made during this frame (a tab dragged out) is shown at once.
+        let mut i = 1;
+        while i < self.windows.len() {
+            self.current = i;
+            let viewport = self.windows[i].viewport;
+            let builder = self.windows[i].builder.clone().unwrap_or_default();
+            ctx.show_viewport_immediate(viewport, builder, |ui, _class| self.window_ui(ui));
+            self.windows[i].shown = true;
+            i += 1;
+        }
+        self.current = 0;
+        self.close_windows();
+        self.find_new_windows(&ctx);
+
         self.follow_theme(&ctx);
         let zoom = ctx.zoom_factor();
         if (zoom - self.settings.zoom).abs() > 0.001 {
@@ -1320,11 +1889,11 @@ impl eframe::App for App {
 
         if let Some(bench) = self.bench.as_mut() {
             // The document, or the error in its place when it cannot be read.
-            let painted_doc = self
-                .tabs
-                .get(self.active)
+            let root = &self.windows[0];
+            let painted_doc = root
+                .active_tab()
                 .is_some_and(|t| t.doc.is_some() || t.error.is_some())
-                || self.tabs.is_empty();
+                || root.tabs.is_empty();
             if painted_doc {
                 bench.mark_once("doc_frame_end");
             }
@@ -1456,5 +2025,48 @@ mod tests {
             strip_verbatim(PathBuf::from("/tmp/a.md")),
             PathBuf::from("/tmp/a.md")
         );
+    }
+
+    fn window_with_tabs(n: u64) -> Window {
+        let mut window = Window::new(1, Some(ViewportBuilder::default()));
+        for id in 0..n {
+            window
+                .tabs
+                .push(Tab::new(id, PathBuf::from(format!("{id}.md"))));
+        }
+        window
+    }
+
+    fn ids(window: &Window) -> Vec<u64> {
+        window.tabs.iter().map(|t| t.id).collect()
+    }
+
+    #[test]
+    fn moving_a_tab_along_the_bar_keeps_the_active_one() {
+        let mut window = window_with_tabs(4);
+        window.active = 0;
+        window.move_tab(0, 2);
+        assert_eq!(ids(&window), [1, 2, 0, 3]);
+        assert_eq!(window.active, 2);
+        // Another tab is active and gets pushed along.
+        window.active = 1;
+        window.move_tab(3, 0);
+        assert_eq!(ids(&window), [3, 1, 2, 0]);
+        assert_eq!(window.active, 2);
+        window.move_tab(0, 3);
+        assert_eq!(ids(&window), [1, 2, 0, 3]);
+        assert_eq!(window.active, 1);
+    }
+
+    #[test]
+    fn removing_a_tab_keeps_the_active_one_in_range() {
+        let mut window = window_with_tabs(3);
+        window.active = 2;
+        window.remove_tab(2);
+        assert_eq!(window.active, 1);
+        window.active = 1;
+        window.remove_tab(0);
+        assert_eq!(window.active, 0);
+        assert_eq!(ids(&window), [1]);
     }
 }

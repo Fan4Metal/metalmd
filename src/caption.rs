@@ -58,8 +58,47 @@ pub fn refresh(hwnd: isize) {
     }
 }
 
+/// The visible top-level windows of this thread, for the windows egui
+/// makes for child viewports: eframe gives no handle for those. winit's
+/// hidden message window is left out.
+#[cfg(windows)]
+pub fn thread_windows() -> Vec<isize> {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn EnumThreadWindows(
+            thread: u32,
+            callback: unsafe extern "system" fn(isize, isize) -> i32,
+            lparam: isize,
+        ) -> i32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentThreadId() -> u32;
+    }
+    unsafe extern "system" fn collect(hwnd: isize, lparam: isize) -> i32 {
+        // SAFETY: `lparam` is the pointer to `out` passed below, and the
+        // callback runs only during the call.
+        let out = unsafe { &mut *(lparam as *mut Vec<isize>) };
+        if unsafe { IsWindowVisible(hwnd) } != 0 {
+            out.push(hwnd);
+        }
+        1
+    }
+    let mut out: Vec<isize> = Vec::new();
+    unsafe {
+        EnumThreadWindows(GetCurrentThreadId(), collect, (&raw mut out) as isize);
+    }
+    out
+}
+
 #[cfg(not(windows))]
 pub fn set_dark(_hwnd: isize, _dark: bool) {}
+
+#[cfg(not(windows))]
+pub fn thread_windows() -> Vec<isize> {
+    Vec::new()
+}
 
 #[cfg(not(windows))]
 pub fn refresh(_hwnd: isize) {}

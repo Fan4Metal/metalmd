@@ -31,7 +31,7 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 - **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
 - **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` and other tags common in READMEs.
 - **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
-- **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window.
+- **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window. A tab dragged out of the window gets a window of its own, a tab dragged into another window joins it, and dragging along the bar rearranges them.
 - **Live reload**: a file changed on disk is reloaded at the same scroll position.
 - **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied.
 - **Light, dark or system theme**, and zoom.
@@ -88,7 +88,7 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | `Home`, `End` (`Ctrl+Home`, `Ctrl+End`) | Go to the start or the end |
 | `F1` | About |
 
-With the mouse: a code block shows a Copy button under the pointer, and the context menu of a `$$` formula or a diagram copies its source ("Copy TeX", "Copy Mermaid source"); the zoom shown next to the toolbar buttons resets it with a click; the contents button or panel chooses the side of the table of contents with a right click.
+With the mouse: a code block shows a Copy button under the pointer, and the context menu of a `$$` formula or a diagram copies its source ("Copy TeX", "Copy Mermaid source"); the zoom shown next to the toolbar buttons resets it with a click; the contents button or panel chooses the side of the table of contents with a right click; a tab is moved along the bar, into another window or out into a new one by dragging its title, and its context menu does the same.
 
 ## Usage
 
@@ -161,7 +161,7 @@ images/                the icon and the screenshot of this README
 src/
   icon.rs              the procedural icon (a page with the Markdown mark), shared with build.rs
   main.rs              arguments, hand-off to a running window, early loading, eframe, panic message
-  app.rs               tabs, messages from background threads, links, keys, panels
+  app.rs               windows and tabs, messages from background threads, links, keys, panels
   bench.rs             --bench: start-up timestamps
   caption.rs           the window caption in the app's theme
   placement.rs         the restored window kept on a screen
