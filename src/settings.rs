@@ -277,4 +277,24 @@ mod tests {
         assert_eq!(partial.zoom, 1.0);
         assert_eq!(partial.toc_side, TocSide::Left);
     }
+
+    #[test]
+    fn settings_of_version_0_1_take_defaults_for_what_came_later() {
+        let old = r#"{
+            "theme": "dark",
+            "zoom": 1.1,
+            "toc_visible": false,
+            "toc_side": "right",
+            "language": "ru",
+            "recent": ["/notes/a.md"],
+            "window": {"x": 10.0, "y": 20.0, "width": 900.0, "height": 700.0, "maximized": false}
+        }"#;
+        let settings: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(settings.theme, ThemeSetting::Dark);
+        assert_eq!(settings.toc_side, TocSide::Right);
+        assert_eq!(settings.recent, [PathBuf::from("/notes/a.md")]);
+        assert_eq!(settings.font, None);
+        assert_eq!(settings.mono_font, None);
+        assert_eq!(settings.text_size, crate::style::DEFAULT_BODY_SIZE);
+    }
 }

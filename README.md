@@ -19,7 +19,7 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 
 ![MetalMD showing a document with a table of contents on the left, an alert, a task list, a table and a highlighted code block](images/screenshot.png)
 
-*Screenshot of version 0.1.0.*
+*Screenshot of version 0.2.0.*
 
 ## Features
 
@@ -214,8 +214,8 @@ The script writes the files to `dist` and takes the version from `Cargo.toml`. L
 The **Release** workflow (`.github/workflows/release.yml`) builds the releases on GitHub. Update the version in `Cargo.toml`, commit it, and push a matching tag. The workflow then publishes a release with the installer and the portable archive:
 
 ```
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 Running the workflow manually (Actions → Release → Run workflow) builds the files and attaches them to the run, without making a release.
