@@ -10,7 +10,7 @@ use crate::markdown::document::{
 };
 use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
-use crate::style::{BODY_SIZE, FontChoice, MAX_CONTENT_WIDTH, Palette};
+use crate::style::{FontChoice, MAX_CONTENT_WIDTH, Palette, body_size};
 use crate::ui::diagram::DiagramRenderer;
 use crate::ui::emoji::EmojiRenderer;
 use crate::ui::find::{FindState, Match};
@@ -28,7 +28,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Space between blocks.
-const GAP: f32 = BODY_SIZE * 0.9;
+fn block_gap() -> f32 {
+    body_size() * 0.9
+}
 /// Formulas are this much larger than the text around them, as KaTeX's
 /// (its fonts look small next to most text faces).
 const MATH_SCALE: f32 = 1.21;
@@ -338,7 +340,7 @@ fn draw_top_block(
             && !matches!(previous, Some(Block::Footnote { .. }))
         {
             // Separate the footnotes from the text above them.
-            let (line, _) = ui.allocate_exact_size(vec2(rect.width(), GAP), Sense::hover());
+            let (line, _) = ui.allocate_exact_size(vec2(rect.width(), block_gap()), Sense::hover());
             ui.painter().hline(
                 line.x_range(),
                 line.center().y,
@@ -348,7 +350,7 @@ fn draw_top_block(
         draw_block(ui, block, rc, index == 0, index as u64);
     });
     let gap = if index + 1 < doc.blocks.len() {
-        GAP
+        block_gap()
     } else {
         0.0
     };
@@ -371,7 +373,7 @@ fn draw_blocks(ui: &mut Ui, blocks: &[Block], rc: &mut RenderCtx<'_>, gap: f32, 
 }
 
 fn heading_size(level: u8) -> f32 {
-    BODY_SIZE
+    body_size()
         * match level {
             1 => 2.0,
             2 => 1.5,
@@ -391,12 +393,12 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             ..
         } => {
             if !first {
-                ui.add_space(BODY_SIZE * 0.5);
+                ui.add_space(body_size() * 0.5);
             }
             let size = heading_size(*level);
             draw_inlines(ui, inlines, rc, size, Style::STRONG, *align, salt, true);
             if *level <= 2 {
-                ui.add_space(BODY_SIZE * 0.3);
+                ui.add_space(body_size() * 0.3);
                 let width = ui.available_width();
                 let (line, _) = ui.allocate_exact_size(vec2(width, 1.0), Sense::hover());
                 ui.painter().hline(
@@ -407,7 +409,16 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             }
         }
         Block::Paragraph { inlines, align } => {
-            draw_inlines(ui, inlines, rc, BODY_SIZE, Style::NONE, *align, salt, false);
+            draw_inlines(
+                ui,
+                inlines,
+                rc,
+                body_size(),
+                Style::NONE,
+                *align,
+                salt,
+                false,
+            );
         }
         Block::Code {
             id,
@@ -435,7 +446,7 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             let muted = rc.palette.muted;
             draw_barred(ui, bar, |ui| {
                 ui.visuals_mut().override_text_color = Some(muted);
-                draw_blocks(ui, blocks, rc, GAP, salt);
+                draw_blocks(ui, blocks, rc, block_gap(), salt);
             });
         }
         Block::Alert {
@@ -447,11 +458,11 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             draw_barred(ui, color, |ui| {
                 let title = egui::RichText::new(title)
                     .color(color)
-                    .size(BODY_SIZE)
+                    .size(body_size())
                     .family(rc.fonts.bold.clone());
                 ui.add(Label::new(title).selectable(true));
                 ui.add_space(4.0);
-                draw_blocks(ui, blocks, rc, GAP, salt);
+                draw_blocks(ui, blocks, rc, block_gap(), salt);
             });
         }
         Block::List {
@@ -464,18 +475,18 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
         Block::DefinitionList(items) => {
             for (i, (terms, details)) in items.iter().enumerate() {
                 if i > 0 {
-                    ui.add_space(GAP * 0.5);
+                    ui.add_space(block_gap() * 0.5);
                 }
                 draw_blocks(ui, terms, rc, 2.0, salt.wrapping_add(i as u64 * 7919));
                 for (j, detail) in details.iter().enumerate() {
                     ui.horizontal_top(|ui| {
-                        ui.add_space(BODY_SIZE * 1.5);
+                        ui.add_space(body_size() * 1.5);
                         ui.vertical(|ui| {
                             draw_blocks(
                                 ui,
                                 detail,
                                 rc,
-                                GAP * 0.5,
+                                block_gap() * 0.5,
                                 salt.wrapping_add((i * 131 + j) as u64),
                             )
                         });
@@ -486,9 +497,11 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
         Block::Footnote { label, blocks } => {
             let muted = rc.palette.muted;
             ui.horizontal_top(|ui| {
-                let size = BODY_SIZE * 0.875;
-                let (marker, _) = ui
-                    .allocate_exact_size(vec2(BODY_SIZE * 2.0, size * LINE_HEIGHT), Sense::hover());
+                let size = body_size() * 0.875;
+                let (marker, _) = ui.allocate_exact_size(
+                    vec2(body_size() * 2.0, size * LINE_HEIGHT),
+                    Sense::hover(),
+                );
                 ui.painter().text(
                     pos2(marker.right() - 6.0, marker.center().y),
                     egui::Align2::RIGHT_CENTER,
@@ -498,13 +511,13 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
                 );
                 ui.vertical(|ui| {
                     ui.visuals_mut().override_text_color = Some(muted);
-                    draw_blocks(ui, blocks, rc, GAP * 0.5, salt);
+                    draw_blocks(ui, blocks, rc, block_gap() * 0.5, salt);
                 });
             });
         }
         Block::Rule => {
             let width = ui.available_width();
-            let (rect, _) = ui.allocate_exact_size(vec2(width, BODY_SIZE), Sense::hover());
+            let (rect, _) = ui.allocate_exact_size(vec2(width, body_size()), Sense::hover());
             ui.painter().rect_filled(
                 Rect::from_center_size(rect.center(), vec2(width, 3.0)),
                 CornerRadius::same(1),
@@ -540,7 +553,7 @@ fn draw_barred(ui: &mut Ui, color: Color32, add: impl FnOnce(&mut Ui)) {
         return;
     }
     let response = ui.horizontal_top(|ui| {
-        ui.add_space(4.0 + BODY_SIZE * 0.9);
+        ui.add_space(4.0 + body_size() * 0.9);
         ui.vertical(|ui| indented(ui, add));
     });
     let rect = response.response.rect;
@@ -565,18 +578,18 @@ fn draw_list(
         .unwrap_or(0);
     let digits = (start + items.len()).to_string().len() as f32;
     let marker_width = if ordered {
-        BODY_SIZE * (0.75 + 0.55 * digits)
+        body_size() * (0.75 + 0.55 * digits)
     } else {
-        BODY_SIZE * 1.5
+        body_size() * 1.5
     };
-    let line = BODY_SIZE * LINE_HEIGHT;
+    let line = body_size() * LINE_HEIGHT;
     // Too deep to indent again: the marker goes where the last level's
     // markers are, left of the text, which they leave empty below their
     // first line.
     let flat = indents(ui) >= MAX_INDENTS;
     for (i, item) in items.iter().enumerate() {
         if i > 0 {
-            ui.add_space(if tight { 2.0 } else { GAP * 0.6 });
+            ui.add_space(if tight { 2.0 } else { block_gap() * 0.6 });
         }
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -591,10 +604,15 @@ fn draw_list(
             };
             let painter = ui.painter();
             let text_color = ui.visuals().text_color();
-            let center_y = marker.center().y;
+            // The first line's baseline is one ascent below the row's top
+            // (see `text_format`). Bullets and boxes are centred a third of
+            // an em above it, which is the middle of the row in Segoe UI,
+            // so they follow the text in a font of other proportions.
+            let baseline = marker.top() + rc.fonts.body_ascent * body_size();
+            let center_y = baseline - body_size() * 0.33;
             match item.task {
                 Some(checked) => {
-                    let side = BODY_SIZE * 0.85;
+                    let side = body_size() * 0.85;
                     let rect = Rect::from_center_size(
                         pos2(marker.right() - side / 2.0 - 6.0, center_y),
                         vec2(side, side),
@@ -617,11 +635,13 @@ fn draw_list(
                     }
                 }
                 None if ordered => {
+                    // On the baseline: the number is a row of the same
+                    // font, whose baseline is one ascent below its top.
                     let _ = painter.text(
-                        pos2(marker.right() - 6.0, center_y),
-                        egui::Align2::RIGHT_CENTER,
+                        pos2(marker.right() - 6.0, marker.top()),
+                        egui::Align2::RIGHT_TOP,
                         format!("{}.", start + i),
-                        FontId::proportional(BODY_SIZE),
+                        FontId::proportional(body_size()),
                         text_color,
                     );
                 }
@@ -641,7 +661,7 @@ fn draw_list(
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.data_mut(|d| d.insert_temp(Id::new("list-depth"), depth + 1));
-                let gap = if tight { 2.0 } else { GAP * 0.6 };
+                let gap = if tight { 2.0 } else { block_gap() * 0.6 };
                 indented(ui, |ui| {
                     draw_blocks(
                         ui,
@@ -661,7 +681,10 @@ fn draw_list(
 const CELL_GAP: f32 = 20.0;
 /// Vertical space between table rows.
 const ROW_GAP: f32 = 8.0;
-const CELL_SIZE: f32 = BODY_SIZE * 0.95;
+/// Text size in table cells.
+fn cell_size() -> f32 {
+    body_size() * 0.95
+}
 
 /// A table laid out as a browser does (`table-layout: auto`): each column
 /// as wide as its widest cell when they all fit, else at least as wide as
@@ -680,7 +703,7 @@ fn draw_table(ui: &mut Ui, table: &Table, rc: &mut RenderCtx<'_>, salt: u64) {
     let mut max = vec![0.0f32; columns];
     for row in &rows {
         for (c, cell) in row.iter().enumerate() {
-            let (lo, hi) = cell_extent(ui, cell, rc, CELL_SIZE);
+            let (lo, hi) = cell_extent(ui, cell, rc, cell_size());
             min[c] = min[c].max(lo);
             max[c] = max[c].max(hi);
         }
@@ -737,7 +760,7 @@ fn draw_table(ui: &mut Ui, table: &Table, rc: &mut RenderCtx<'_>, salt: u64) {
                                     &mut child,
                                     cell,
                                     rc,
-                                    CELL_SIZE,
+                                    cell_size(),
                                     Style::NONE,
                                     align,
                                     cell_salt,
@@ -1403,7 +1426,7 @@ fn draw_rich_rows(
 /// A `$$ … $$` block: the formula centred, scrolled sideways when wider than
 /// the page. TeX that cannot be typeset is shown as code with the error.
 fn draw_display_math(ui: &mut Ui, id: u32, tex: &str, rc: &mut RenderCtx<'_>, salt: u64) {
-    let em = BODY_SIZE * MATH_SCALE;
+    let em = body_size() * MATH_SCALE;
     let color = ui.visuals().text_color();
     let ppem = em * ui.ctx().pixels_per_point();
     let formula = match rc.pictures.math.get(ui.ctx(), tex, true, color, ppem) {
@@ -1661,7 +1684,7 @@ fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) -> Response
 }
 
 fn code_job(code: &str, highlights: Option<&[HlSpan]>, rc: &RenderCtx<'_>, id: u32) -> LayoutJob {
-    let size = BODY_SIZE * CODE_SCALE;
+    let size = body_size() * CODE_SCALE;
     let (matches, current) = rc.find.matches_in(id);
     let base = TextFormat {
         font_id: FontId::monospace(size),
@@ -1797,10 +1820,10 @@ fn draw_code(
 
 /// A cheap guess at a block's height before it is laid out.
 fn estimate(block: &Block, width: f32) -> f32 {
-    let line = BODY_SIZE * LINE_HEIGHT;
-    let chars_per_line = (width / (BODY_SIZE * 0.5)).max(10.0);
+    let line = body_size() * LINE_HEIGHT;
+    let chars_per_line = (width / (body_size() * 0.5)).max(10.0);
     let text_height = |len: usize, newlines: usize, size: f32| {
-        let scale = size / BODY_SIZE;
+        let scale = size / body_size();
         let lines = ((len as f32 * scale) / chars_per_line).ceil().max(1.0) + newlines as f32;
         lines * size * LINE_HEIGHT
     };
@@ -1819,18 +1842,18 @@ fn estimate(block: &Block, width: f32) -> f32 {
         }
         text_height(len, newlines, size).max(images)
     };
-    let gap = GAP;
+    let gap = block_gap();
     match block {
         Block::Heading { level, inlines, .. } => {
             inline_height(inlines, heading_size(*level))
-                + BODY_SIZE * 0.5
+                + body_size() * 0.5
                 + if *level <= 2 { 6.0 } else { 0.0 }
                 + gap
         }
-        Block::Paragraph { inlines, .. } => inline_height(inlines, BODY_SIZE) + gap,
+        Block::Paragraph { inlines, .. } => inline_height(inlines, body_size()) + gap,
         Block::Code { lang, .. } if lang.eq_ignore_ascii_case("mermaid") => 300.0 + gap,
         Block::Code { code, .. } | Block::Math { tex: code, .. } => {
-            (code.lines().count().max(1) as f32) * (BODY_SIZE * CODE_SCALE * 1.45).round()
+            (code.lines().count().max(1) as f32) * (body_size() * CODE_SCALE * 1.45).round()
                 + 24.0
                 + gap
         }
@@ -1857,7 +1880,7 @@ fn estimate(block: &Block, width: f32) -> f32 {
         }
         Block::Table(table) => (table.rows.len() + 1) as f32 * (line + 8.0) + 16.0 + gap,
         Block::DefinitionList(items) => items.len() as f32 * line * 2.0 + gap,
-        Block::Rule => BODY_SIZE + gap,
+        Block::Rule => body_size() + gap,
     }
 }
 

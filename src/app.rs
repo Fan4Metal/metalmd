@@ -1,13 +1,14 @@
 //! The application: windows, tabs, background loading, input and panels.
 
 use crate::bench::Bench;
+use crate::fonts::{Family, FontSpec};
 use crate::fs_text;
 use crate::markdown::document::{Block, Document, Scripts};
 use crate::markdown::highlight::Highlighter;
 use crate::markdown::preprocess::{heading_anchor_id, is_markdown_path, percent_decode};
 use crate::settings::{Settings, ThemeSetting, TocSide, same_path};
 use crate::single_instance::Server;
-use crate::style::{self, BODY_SIZE, FontChoice, Palette};
+use crate::style::{self, FontChoice, Palette, body_size};
 use crate::ui::about::About;
 use crate::ui::confirm::{ConfirmOpen, LinkTarget};
 use crate::ui::diagram::DiagramRenderer;
@@ -15,6 +16,7 @@ use crate::ui::emoji::EmojiRenderer;
 use crate::ui::find::FindState;
 use crate::ui::home::{self, HomeAction};
 use crate::ui::math::MathRenderer;
+use crate::ui::text::{TextChange, TextPanel};
 use crate::ui::toc;
 use crate::ui::viewer::Pictures;
 use crate::ui::viewer::{self, RenderCtx, ViewAction, ViewState};
@@ -55,6 +57,16 @@ pub enum AppMsg {
     OpenPaths(Vec<PathBuf>),
     FileChanged(PathBuf),
     Fonts(Vec<(String, FontData)>),
+    /// The system's font families, for the Text panel.
+    FontList(Arc<Vec<Family>>),
+    /// A family chosen in the Text panel, resolved to its faces (`None` if
+    /// it has none that can be used). `request` tells a late answer from
+    /// the last one asked for.
+    FontResolved {
+        mono: bool,
+        request: u64,
+        spec: Option<Box<FontSpec>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -328,6 +340,15 @@ pub struct App {
     fonts: FontChoice,
     fonts_generation: u64,
     fallback_scripts: Scripts,
+    /// The fallback fonts loaded for the scripts of documents, kept to be
+    /// added again when the reader chooses other fonts.
+    extra_fonts: Vec<(String, Arc<FontData>)>,
+    /// Fonts were set this frame: measure them at the start of the next,
+    /// when they are live.
+    remeasure_fonts: bool,
+    /// The number of the last font asked for in the Text panel.
+    font_request: u64,
+    text_panel: TextPanel,
     watcher: Option<FileWatcher>,
     frame: u64,
     bench: Option<Bench>,
@@ -373,7 +394,11 @@ impl App {
         // A wheel notch scrolls 100 points instead of egui's 40, as far as
         // Chromium scrolls with the default three lines per notch.
         ctx.options_mut(|o| o.input_options.line_scroll_speed = 100.0);
-        let (base_fonts, fonts) = style::load_fonts();
+        style::set_body_size(startup.settings.text_size);
+        let (base_fonts, fonts) = style::load_fonts(
+            startup.settings.font.as_ref(),
+            startup.settings.mono_font.as_ref(),
+        );
         ctx.set_fonts(base_fonts.clone());
         egui_extras::install_image_loaders(&ctx);
         crate::ui::animation::ApngLoader::install(&ctx);
@@ -443,6 +468,10 @@ impl App {
             fonts,
             fonts_generation: 0,
             fallback_scripts: Scripts::default(),
+            extra_fonts: Vec::new(),
+            remeasure_fonts: false,
+            font_request: 0,
+            text_panel: TextPanel::default(),
             watcher: None,
             frame: 0,
             bench,
@@ -748,10 +777,36 @@ impl App {
             }
             AppMsg::Fonts(extra) => {
                 if !extra.is_empty() {
+                    let extra: Vec<(String, Arc<FontData>)> = extra
+                        .into_iter()
+                        .map(|(key, data)| (key, Arc::new(data)))
+                        .collect();
                     self.base_fonts = style::with_fallbacks(self.base_fonts.clone(), &extra);
+                    self.extra_fonts.extend(extra);
                     ctx.set_fonts(self.base_fonts.clone());
                     self.fonts_generation += 1;
                 }
+            }
+            AppMsg::FontList(families) => {
+                self.text_panel.families = Some(families);
+                self.text_panel.listing = false;
+            }
+            AppMsg::FontResolved {
+                mono,
+                request,
+                spec,
+            } => {
+                if request != self.font_request || spec.is_none() {
+                    return;
+                }
+                let spec = spec.map(|spec| *spec);
+                if mono {
+                    self.settings.mono_font = spec;
+                } else {
+                    self.settings.font = spec;
+                }
+                self.settings_dirty = true;
+                self.reload_fonts(ctx);
             }
         }
     }
@@ -946,6 +1001,89 @@ impl App {
         }
     }
 
+    /// Builds the fonts anew from the settings, keeping the fallbacks
+    /// loaded for documents. They are live from the next frame, which
+    /// measures them (`remeasure_fonts`).
+    fn reload_fonts(&mut self, ctx: &egui::Context) {
+        let (defs, choice) = style::load_fonts(
+            self.settings.font.as_ref(),
+            self.settings.mono_font.as_ref(),
+        );
+        self.base_fonts = style::with_fallbacks(defs, &self.extra_fonts);
+        ctx.set_fonts(self.base_fonts.clone());
+        self.fonts = choice;
+        self.remeasure_fonts = true;
+        ctx.request_repaint();
+    }
+
+    /// Opens or closes the Text panel in the current window, and lists the
+    /// system's fonts the first time.
+    fn toggle_text_panel(&mut self) {
+        let id = self.win().id;
+        let panel = &mut self.text_panel;
+        panel.open = !(panel.open && panel.window == id);
+        panel.window = id;
+        if panel.open && panel.families.is_none() && !panel.listing {
+            panel.listing = true;
+            let sender = self.sender.clone();
+            let cell = self.ctx_cell.clone();
+            std::thread::spawn(move || {
+                let families = crate::fonts::system_families();
+                let _ = sender.send(AppMsg::FontList(Arc::new(families)));
+                request_repaint(&cell);
+            });
+        }
+    }
+
+    fn apply_text_change(&mut self, ctx: &egui::Context, change: TextChange) {
+        match change {
+            TextChange::Font { mono, family } => {
+                self.font_request += 1;
+                match family {
+                    None => {
+                        if mono {
+                            self.settings.mono_font = None;
+                        } else {
+                            self.settings.font = None;
+                        }
+                        self.settings_dirty = true;
+                        self.reload_fonts(ctx);
+                    }
+                    // Its files are read to find its axes: off the UI thread.
+                    Some(family) => {
+                        let request = self.font_request;
+                        let sender = self.sender.clone();
+                        let cell = self.ctx_cell.clone();
+                        std::thread::spawn(move || {
+                            let spec = crate::fonts::resolve(&family).map(Box::new);
+                            let _ = sender.send(AppMsg::FontResolved {
+                                mono,
+                                request,
+                                spec,
+                            });
+                            request_repaint(&cell);
+                        });
+                    }
+                }
+            }
+            TextChange::Size(size) => {
+                style::set_body_size(size);
+                self.settings.text_size = style::body_size();
+                self.settings_dirty = true;
+                self.fonts_generation += 1;
+            }
+            TextChange::Reset => {
+                self.font_request += 1;
+                self.settings.font = None;
+                self.settings.mono_font = None;
+                style::set_body_size(style::DEFAULT_BODY_SIZE);
+                self.settings.text_size = style::DEFAULT_BODY_SIZE;
+                self.settings_dirty = true;
+                self.reload_fonts(ctx);
+            }
+        }
+    }
+
     /// About is open in the current window.
     fn about_here(&self) -> bool {
         self.about.open && self.about_window == self.windows[self.current].id
@@ -975,6 +1113,12 @@ impl App {
         // A dialog takes the keyboard (Enter and Esc close it).
         if self.about_here() || self.win().confirm.is_open() {
             return;
+        }
+        if self.text_panel.open
+            && self.text_panel.window == self.win().id
+            && consume(plain(Key::Escape))
+        {
+            self.text_panel.open = false;
         }
         if consume(command(Key::F)) {
             let find = &mut self.win().find;
@@ -1042,7 +1186,7 @@ impl App {
         };
         // Chromium's steps: 87.5 % of the view for a page, 40 px for a line.
         let page = (tab.view.viewport_height * 0.875).max(40.0);
-        let line = BODY_SIZE * 2.5;
+        let line = body_size() * 2.5;
         ctx.input_mut(|i| {
             let mut delta = 0.0;
             if i.consume_key(Modifiers::NONE, Key::PageDown)
@@ -1192,6 +1336,10 @@ impl App {
                             self.settings.theme = theme.next();
                             ui.ctx().set_theme(self.settings.theme.preference());
                             self.settings_dirty = true;
+                        }
+                        let text_open = self.text_panel.open && self.text_panel.window == wid;
+                        if crate::ui::text_button(ui, text_open).clicked() {
+                            self.toggle_text_panel();
                         }
                         let toc = crate::ui::toc_button(ui, self.settings.toc_visible);
                         if toc.clicked() {
@@ -1563,7 +1711,7 @@ impl App {
             && *id == m.id
         {
             let line = code[..m.range.start.min(code.len())].matches('\n').count();
-            offset -= line as f32 * (BODY_SIZE * 0.875 * 1.45).round();
+            offset -= line as f32 * (body_size() * 0.875 * 1.45).round();
         }
         tab.view.jump_to(m.block, offset);
     }
@@ -1799,6 +1947,12 @@ impl App {
                 self.settings_dirty = true;
             }
         }
+        if self.text_panel.open
+            && self.text_panel.window == wid
+            && let Some(change) = self.text_panel.show(&ctx, &self.settings)
+        {
+            self.apply_text_change(&ctx, change);
+        }
         if let Some(target) = self.windows[cur].confirm.show(&ctx) {
             self.open_target(target);
         }
@@ -1855,6 +2009,12 @@ impl eframe::App for App {
         }
         if self.frame == 2 {
             self.start_background_services();
+        }
+        if std::mem::take(&mut self.remeasure_fonts) {
+            // The fonts set last frame are live now; every block is
+            // measured again with them.
+            self.fonts.measure_ascents(&ctx);
+            self.fonts_generation += 1;
         }
         self.process_messages(&ctx);
 

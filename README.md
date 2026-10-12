@@ -30,6 +30,7 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 - **Colour emoji**, drawn with the system emoji font (Segoe UI Emoji).
 - **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
 - **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` and other tags common in READMEs.
+- **Fonts and text size**: the Aa button opens a panel where the text font, the code font and the text size are chosen from the fonts installed in the system. Changes apply at once. Variable fonts get their bold and italic from their axes, and a family without italic is slanted.
 - **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
 - **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window. A tab dragged out of the window gets a window of its own, a tab dragged into another window joins it, and dragging along the bar rearranges them.
 - **Live reload**: a file changed on disk is reloaded at the same scroll position.
@@ -100,7 +101,7 @@ Each file opens in a tab. If MetalMD is already running, it receives the files a
 
 Links to other Markdown files (`.md`, `.markdown`, `.mdown`, `.mkd`, `.txt`) open in a new tab, at the heading or block named after `#`. `#anchor` links scroll the document. Other links open in the default program.
 
-The theme, zoom, interface language, the table of contents' visibility and side, window position and size, and the last nine files are saved between runs.
+The theme, zoom, interface language, fonts and text size, the table of contents' visibility and side, window position and size, and the last nine files are saved between runs.
 
 The program does not access the network, except to load images that a document links over http(s).
 
@@ -170,7 +171,8 @@ src/
   settings.rs          settings, recent files, portable mode
   single_instance.rs   one process per user: named pipe / local socket
   watcher.rs           file watching (notify)
-  style.rs             colours, fonts, egui visuals
+  style.rs             colours, fonts, text size, egui visuals
+  fonts.rs             the system's font families, a chosen family resolved to its faces
   markdown/
     preprocess.rs      wikilinks, embeds, block ids, comrak options (from Markpad)
     document.rs        comrak AST → a block model with styled text
@@ -188,6 +190,7 @@ src/
     animation.rs       animated GIF, WebP and APNG
     limit.rs           images larger than the GPU takes, made smaller
     toc.rs             table of contents
+    text.rs            Text panel: fonts and text size
     find.rs            find bar
     home.rs            start page with the icon and recent files
     about.rs           About window

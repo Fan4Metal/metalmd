@@ -35,6 +35,10 @@ encoding_rs = "0.8.42"
 chardetng = "1.0.0"
 open = "5.4.4"
 raw-window-handle = "0.6"
+# Already used by resvg and RaTeX: the system's font families, for the Text panel.
+fontdb = { version = "0.23.0", default-features = false, features = ["fs", "memmap"] }
+# Already used by egui, which reads fonts with it: a chosen font is checked with it first.
+skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

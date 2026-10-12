@@ -14,6 +14,7 @@ mod i18n;
 mod app;
 mod bench;
 mod caption;
+mod fonts;
 mod fs_text;
 mod icon;
 mod markdown;

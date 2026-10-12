@@ -1,12 +1,36 @@
 //! Colors, fonts and egui visuals.
 
+use crate::fonts::FontSpec;
 use crate::markdown::document::{AlertKind, Scripts};
 use egui::{Color32, FontData, FontDefinitions, FontFamily, Theme, Visuals};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Body text size in points. Everything else is relative to it.
-pub const BODY_SIZE: f32 = 16.0;
+/// Body text size in points unless the reader chose another.
+pub const DEFAULT_BODY_SIZE: f32 = 16.0;
+/// The sizes the Text panel offers.
+pub const BODY_SIZES: std::ops::RangeInclusive<f32> = 12.0..=24.0;
+
+/// The body text size, as `f32` bits.
+static BODY_SIZE: AtomicU32 = AtomicU32::new(DEFAULT_BODY_SIZE.to_bits());
+
+/// Body text size in points. Everything in a document is relative to it;
+/// the interface keeps its own sizes.
+pub fn body_size() -> f32 {
+    f32::from_bits(BODY_SIZE.load(Ordering::Relaxed))
+}
+
+/// Sets the body text size (see [`BODY_SIZES`]). Blocks measured at the old
+/// size must be measured again: the caller bumps the fonts generation.
+pub fn set_body_size(size: f32) {
+    let size = if size.is_finite() {
+        size.clamp(*BODY_SIZES.start(), *BODY_SIZES.end())
+    } else {
+        DEFAULT_BODY_SIZE
+    };
+    BODY_SIZE.store(size.to_bits(), Ordering::Relaxed);
+}
 /// Widest the text column gets, in points, before it is centered.
 pub const MAX_CONTENT_WIDTH: f32 = 880.0;
 
@@ -190,6 +214,15 @@ struct FaceFiles {
     symbols: &'static [&'static str],
 }
 
+/// The families used when the reader chose none, as the Text panel names
+/// them.
+#[cfg(windows)]
+pub const DEFAULT_FAMILIES: (&str, &str) = ("Segoe UI", "Consolas");
+#[cfg(target_os = "macos")]
+pub const DEFAULT_FAMILIES: (&str, &str) = ("Arial", "Courier New");
+#[cfg(all(unix, not(target_os = "macos")))]
+pub const DEFAULT_FAMILIES: (&str, &str) = ("DejaVu Sans", "DejaVu Sans Mono");
+
 #[cfg(windows)]
 const FACES: FaceFiles = FaceFiles {
     regular: &["segoeui.ttf"],
@@ -274,10 +307,19 @@ fn read_first(candidates: &[&str]) -> Option<Vec<u8>> {
         .find_map(|name| std::fs::read(font_path(name)).ok())
 }
 
-/// Builds the font set: the platform's UI font with real bold and italic
-/// faces, its monospace font, then egui's bundled fonts as fallbacks for
-/// symbols and emoji. Missing files fall back to egui's defaults.
-pub fn load_fonts() -> (FontDefinitions, FontChoice) {
+fn read_data(candidates: &[&str]) -> Option<FontData> {
+    read_first(candidates).map(FontData::from_owned)
+}
+
+/// Builds the font set: the reader's fonts or the platform's UI font, with
+/// real bold and italic faces, the reader's or the platform's monospace
+/// font, then egui's bundled fonts as fallbacks for symbols and emoji. A
+/// chosen font whose files are gone gives way to the platform's, missing
+/// platform files to egui's defaults.
+pub fn load_fonts(
+    body: Option<&FontSpec>,
+    mono: Option<&FontSpec>,
+) -> (FontDefinitions, FontChoice) {
     let mut defs = FontDefinitions::default();
     let mut choice = FontChoice::default();
     let bundled: Vec<String> = defs
@@ -286,31 +328,56 @@ pub fn load_fonts() -> (FontDefinitions, FontChoice) {
         .cloned()
         .unwrap_or_default();
 
-    let mut insert = |key: &str, files: &[&str]| -> bool {
-        match read_first(files) {
-            Some(bytes) => {
-                defs.font_data
-                    .insert(key.to_owned(), Arc::new(FontData::from_owned(bytes)));
+    let mut insert = |key: &str, data: Option<FontData>| -> bool {
+        match data {
+            Some(data) => {
+                defs.font_data.insert(key.to_owned(), Arc::new(data));
                 true
             }
             None => false,
         }
     };
-    let has_regular = insert("sys-regular", FACES.regular);
-    let has_symbols = insert("sys-symbols", FACES.symbols);
+    // Regular, bold, italic, bold italic: the chosen family's, if its
+    // regular face can be read, else the platform's.
+    let chosen = body.and_then(|spec| Some((spec, crate::fonts::read(&spec.regular)?)));
+    let [regular, bold, italic, bold_italic] = match chosen {
+        Some((spec, regular)) => {
+            let face = |f: &Option<crate::fonts::FaceRef>| f.as_ref().and_then(crate::fonts::read);
+            [
+                Some(regular),
+                face(&spec.bold),
+                face(&spec.italic),
+                face(&spec.bold_italic),
+            ]
+        }
+        None => {
+            let regular = read_data(FACES.regular);
+            let styled = |files| regular.is_some().then(|| read_data(files)).flatten();
+            let styles = [
+                styled(FACES.bold),
+                styled(FACES.italic),
+                styled(FACES.bold_italic),
+            ];
+            let [bold, italic, bold_italic] = styles;
+            [regular, bold, italic, bold_italic]
+        }
+    };
+    let has_regular = insert("sys-regular", regular);
+    let has_symbols = insert("sys-symbols", read_data(FACES.symbols));
     let mut styled_loaded = Vec::new();
-    if has_regular {
-        for (key, files) in [
-            ("sys-bold", FACES.bold),
-            ("sys-italic", FACES.italic),
-            ("sys-bold-italic", FACES.bold_italic),
-        ] {
-            if insert(key, files) {
-                styled_loaded.push(key);
-            }
+    for (key, data) in [
+        ("sys-bold", bold),
+        ("sys-italic", italic),
+        ("sys-bold-italic", bold_italic),
+    ] {
+        if has_regular && insert(key, data) {
+            styled_loaded.push(key);
         }
     }
-    let has_mono = insert("sys-mono", FACES.mono);
+    let mono = mono
+        .and_then(|spec| crate::fonts::read(&spec.regular))
+        .or_else(|| read_data(FACES.mono));
+    let has_mono = insert("sys-mono", mono);
 
     // Every family ends with the same fallbacks: the regular face, symbols,
     // then egui's bundled fonts (emoji).
@@ -329,7 +396,7 @@ pub fn load_fonts() -> (FontDefinitions, FontChoice) {
         defs.families
             .insert(FontFamily::Proportional, chain("sys-regular"));
     }
-    for key in styled_loaded {
+    for &key in &styled_loaded {
         let (name, slot) = match key {
             "sys-bold" => ("bold", &mut choice.bold),
             "sys-italic" => ("italic", &mut choice.italic),
@@ -341,6 +408,15 @@ pub fn load_fonts() -> (FontDefinitions, FontChoice) {
         if key == "sys-italic" {
             choice.fake_italic = false;
         }
+    }
+    if !styled_loaded.contains(&"sys-bold-italic") {
+        // No bold italic face: the bold one slanted where italic is slanted
+        // too, else the italic one.
+        choice.bold_italic = if choice.fake_italic {
+            choice.bold.clone()
+        } else {
+            choice.italic.clone()
+        };
     }
     if has_mono {
         let mut mono = vec!["sys-mono".to_owned()];
@@ -425,9 +501,12 @@ pub fn load_cjk_fonts(scripts: Scripts) -> Vec<(String, FontData)> {
 }
 
 /// Appends fallback fonts to every family.
-pub fn with_fallbacks(mut defs: FontDefinitions, extra: &[(String, FontData)]) -> FontDefinitions {
+pub fn with_fallbacks(
+    mut defs: FontDefinitions,
+    extra: &[(String, Arc<FontData>)],
+) -> FontDefinitions {
     for (key, data) in extra {
-        defs.font_data.insert(key.clone(), Arc::new(data.clone()));
+        defs.font_data.insert(key.clone(), Arc::clone(data));
         for family in defs.families.values_mut() {
             if !family.contains(key) {
                 family.push(key.clone());

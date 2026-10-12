@@ -12,6 +12,7 @@ pub mod limit;
 pub mod math;
 pub mod render_cache;
 pub mod svg;
+pub mod text;
 pub mod toc;
 pub mod viewer;
 
@@ -92,6 +93,36 @@ Right-click: left or right side",
             painter.line_segment(
                 [c + vec2(-2.5 + indent, y), c + vec2(6.0, y)],
                 Stroke::new(1.3, color),
+            );
+        }
+    })
+}
+
+/// Opens the Text panel (fonts and text size): a large and a small "A",
+/// drawn in lines like the other icons.
+pub fn text_button(ui: &mut Ui, open: bool) -> Response {
+    use egui::{Stroke, pos2};
+    let tip = tr!("Fonts and text size", "Шрифты и размер текста");
+    icon_button(ui, "text_icon", open, tip, |painter, c, color, _| {
+        let stroke = Stroke::new(1.3, color);
+        let at = |x: f32, y: f32| pos2(c.x + x, c.y + y);
+        // (apex, left foot, right foot, crossbar height)
+        for (apex, left, right, bar) in
+            [((-3.0, -6.0), -7.5, 1.5, 2.0), ((4.5, 0.0), 2.0, 7.0, 4.0)]
+        {
+            let foot = 6.0;
+            painter.line(
+                vec![at(left, foot), at(apex.0, apex.1), at(right, foot)],
+                stroke,
+            );
+            // Where the bar meets the legs.
+            let t = (foot - bar) / (foot - apex.1);
+            painter.line_segment(
+                [
+                    at(left + (apex.0 - left) * t, bar),
+                    at(right + (apex.0 - right) * t, bar),
+                ],
+                stroke,
             );
         }
     })

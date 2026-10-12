@@ -1,5 +1,6 @@
 //! User settings and recent files, stored as JSON in the config directory.
 
+use crate::fonts::FontSpec;
 use crate::i18n::LangChoice;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -68,6 +69,13 @@ pub struct Settings {
     pub language: LangChoice,
     pub recent: Vec<PathBuf>,
     pub window: Option<WindowGeometry>,
+    /// The document's text font, chosen in the Text panel; `None` for the
+    /// platform's.
+    pub font: Option<FontSpec>,
+    /// The font of code, chosen in the Text panel.
+    pub mono_font: Option<FontSpec>,
+    /// Body text size in points.
+    pub text_size: f32,
 }
 
 impl Default for Settings {
@@ -80,6 +88,9 @@ impl Default for Settings {
             language: LangChoice::System,
             recent: Vec::new(),
             window: None,
+            font: None,
+            mono_font: None,
+            text_size: crate::style::DEFAULT_BODY_SIZE,
         }
     }
 }
@@ -145,6 +156,9 @@ impl Settings {
                 // What egui's zoom keys reach: 0.2 to 5.
                 if !(0.2..=5.0).contains(&settings.zoom) {
                     settings.zoom = 1.0;
+                }
+                if !crate::style::BODY_SIZES.contains(&settings.text_size) {
+                    settings.text_size = crate::style::DEFAULT_BODY_SIZE;
                 }
                 settings
             })
