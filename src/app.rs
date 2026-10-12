@@ -304,6 +304,7 @@ struct TabDrag {
 enum TabMenu {
     Detach(usize),
     ToRoot(usize),
+    CloseOthers(usize),
 }
 
 /// What `main` prepared before the window existed.
@@ -619,6 +620,21 @@ impl App {
         }
         let tab = self.win().remove_tab(index);
         self.drop_tab(tab);
+    }
+
+    /// Closes every tab of the current window but tab `index`.
+    fn close_other_tabs(&mut self, index: usize) {
+        let window = self.win();
+        if index >= window.tabs.len() {
+            return;
+        }
+        let kept = window.tabs.remove(index);
+        let closed = std::mem::replace(&mut window.tabs, vec![kept]);
+        window.active = 0;
+        window.find.invalidate();
+        for tab in closed {
+            self.drop_tab(tab);
+        }
     }
 
     /// Lets go of a tab taken out of its window.
@@ -1300,6 +1316,17 @@ impl App {
                                 close = Some(i);
                                 ui.close();
                             }
+                            ui.separator();
+                            if ui
+                                .add_enabled(
+                                    tab_count > 1,
+                                    egui::Button::new(tr!("Close others", "Закрыть другие")),
+                                )
+                                .clicked()
+                            {
+                                menu_action = Some(TabMenu::CloseOthers(i));
+                                ui.close();
+                            }
                         });
                         let close_button =
                             egui::Button::new(RichText::new("×").size(14.0).color(palette.muted))
@@ -1405,6 +1432,7 @@ impl App {
                 let root = self.windows[0].viewport;
                 ui.ctx().send_viewport_cmd_to(root, ViewportCommand::Focus);
             }
+            Some(TabMenu::CloseOthers(i)) => self.close_other_tabs(i),
             None => {}
         }
         if open_dialog {

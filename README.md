@@ -89,7 +89,7 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | `Home`, `End` (`Ctrl+Home`, `Ctrl+End`) | Go to the start or the end |
 | `F1` | About |
 
-With the mouse: a code block shows a Copy button under the pointer, and the context menu of a `$$` formula or a diagram copies its source ("Copy TeX", "Copy Mermaid source"); the zoom shown next to the toolbar buttons resets it with a click; the contents button or panel chooses the side of the table of contents with a right click; a tab is moved along the bar, into another window or out into a new one by dragging its title, and its context menu does the same.
+With the mouse: a code block shows a Copy button under the pointer, and the context menu of a `$$` formula or a diagram copies its source ("Copy TeX", "Copy Mermaid source"); the zoom shown next to the toolbar buttons resets it with a click; the contents button or panel chooses the side of the table of contents with a right click; a tab is moved along the bar, into another window or out into a new one by dragging its title, and its context menu does the same and also closes the other tabs.
 
 ## Usage
 
