@@ -30,12 +30,12 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 - **Formulas**: `$…$` and `$$…$$` are typeset as KaTeX does it, by [RaTeX](https://github.com/erweixin/RaTeX), a port of KaTeX to Rust.
 - **Colour emoji**, drawn with the system emoji font (Segoe UI Emoji).
 - **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
-- **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` and other tags common in READMEs.
+- **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` that opens and closes with a click on its summary, and other tags common in READMEs.
 - **Fonts and text size**: the Aa button opens a panel where the text font, the code font and the text size are chosen from the fonts installed in the system. Changes apply at once. Variable fonts get their bold and italic from their axes, and a family without italic is slanted.
 - **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
 - **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window. A tab dragged out of the window gets a window of its own, a tab dragged into another window joins it, and dragging along the bar rearranges them.
 - **Live reload**: a file changed on disk is reloaded at the same scroll position.
-- **Task lists can be ticked**: a click on a box switches `- [ ]` and `- [x]` in the file itself. Only that character changes; the encoding and line endings stay as they were.
+- **Task lists can be ticked**: a click on a box switches `- [ ]` and `- [x]` in the file itself. Only that character changes; the encoding and line endings stay as they were. `Ctrl+Z` undoes the ticks one by one, as long as the file has not been changed by another program since.
 - **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied.
 - **Light, dark or system theme**, and zoom.
 - **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`).
@@ -55,12 +55,12 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 | Diagrams | ```` ```mermaid ```` blocks: the diagram types of [mermaid-svg](https://github.com/xmiksay/mermaid) |
 | Code blocks | highlighted with [syntect](https://github.com/trishume/syntect) and the grammars of [two-face](https://github.com/CosmicHorrorDev/two-face) |
 | Images | PNG, JPEG, GIF, WebP, SVG, BMP and ICO, local or over http(s); animated GIF, WebP and APNG play; SVG badges keep their text |
-| HTML | `<img>`, `<a>`, `<br>`, `<p align="center">`, `<b>`, `<i>`, `<kbd>`, `<sub>`, `<sup>`, `<mark>`, `<details>` (always open) |
+| HTML | `<img>`, `<a>`, `<br>`, `<p align="center">`, `<b>`, `<i>`, `<kbd>`, `<sub>`, `<sup>`, `<mark>`, `<details>` |
 
 **Not supported**:
 
 - video, audio and YouTube previews: they are not shown;
-- Markpad's extra alert types (`[!TODO]` and others), foldable alerts and folding `<details>`;
+- Markpad's extra alert types (`[!TODO]` and others), foldable alerts;
 - `data:` images;
 - HTML beyond the tags above;
 - flag emoji in colour: Segoe UI Emoji has no flags, so 🇷🇺 shows as the letters RU, as in browsers on Windows.
@@ -85,6 +85,7 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | `Esc` | Close find |
 | `Ctrl+Shift+O` | Show or hide the table of contents |
 | `F5`, `Ctrl+R` | Reload the file |
+| `Ctrl+Z` | Undo the last tick of a task list item |
 | `Alt+←`, mouse Back button | Go back after following a link |
 | `Ctrl+=` / `Ctrl+−` / `Ctrl+0`, `Ctrl`+wheel | Zoom in, out, reset |
 | `PageUp`, `PageDown`, `Space` / `Shift+Space`, arrows | Scroll |

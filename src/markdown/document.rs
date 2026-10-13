@@ -188,6 +188,21 @@ pub enum Block {
         yaml: String,
     },
     Rule,
+    /// The `<summary>` row of a `<details>`. The blocks after it, up to its
+    /// `DetailsEnd` in the same list of blocks, are what it hides. They stay
+    /// blocks of their own, as the Markdown between `<details>` and
+    /// `</details>` is a series of comrak blocks, and anchors, find and the
+    /// viewer's measuring keep working on top-level blocks.
+    Details {
+        /// Its number in the document, which keeps across reloads unless
+        /// one is added or removed before it.
+        index: u32,
+        /// Written `<details open>`.
+        open: bool,
+        /// Empty if it has none, shown as a browser does ("Details").
+        summary: Vec<Inline>,
+    },
+    DetailsEnd,
 }
 
 /// An entry of the table of contents.
@@ -334,6 +349,8 @@ struct Builder {
     html_align: Vec<(String, Align)>,
     /// Style applied to everything built while set (table headers, terms).
     base_style: Style,
+    /// `<details>` built so far.
+    details: u32,
 }
 
 impl Builder {
@@ -612,6 +629,8 @@ impl Builder {
         let mut heading: Option<u8> = None;
         // Inside `<pre>`: its language and its text so far, as written.
         let mut pre: Option<(String, String)> = None;
+        // The `Details` in `out` that a `<summary>` would name.
+        let mut summary_of: Option<usize> = None;
         for token in html::tokenize(literal) {
             if let Some((lang, code)) = pre.as_mut() {
                 match &token {
@@ -662,15 +681,34 @@ impl Builder {
                     if let Some(level) = html_heading_level(name) {
                         heading = Some(level);
                     }
-                    if name == "summary" || name == "dt" || name == "th" {
+                    if name == "details" {
+                        out.push(Block::Details {
+                            index: self.details,
+                            open: html::attr(attrs, "open").is_some(),
+                            summary: Vec::new(),
+                        });
+                        self.details += 1;
+                        summary_of = Some(out.len() - 1);
+                    }
+                    if name == "dt" || name == "th" {
                         ctx.html_open(name, Style::STRONG);
                     }
                 }
                 Token::Close { name } if is_html_block_tag(name) => {
-                    if name == "summary" || name == "dt" || name == "th" {
+                    if name == "dt" || name == "th" {
                         ctx.html_close(name);
                     }
+                    if name == "summary"
+                        && let Some(at) = summary_of.take()
+                        && let Some(Block::Details { summary, .. }) = out.get_mut(at)
+                    {
+                        *summary = self.take_html_inlines(&mut ctx).unwrap_or_default();
+                    }
                     self.flush_html_paragraph(&mut ctx, heading.take(), out);
+                    if name == "details" {
+                        summary_of = None;
+                        out.push(Block::DetailsEnd);
+                    }
                     if let Some(pos) = self.html_align.iter().rposition(|(n, _)| n == name) {
                         self.html_align.truncate(pos);
                     }
@@ -696,6 +734,23 @@ impl Builder {
         heading: Option<u8>,
         out: &mut Vec<Block>,
     ) {
+        let Some(inlines) = self.take_html_inlines(ctx) else {
+            return;
+        };
+        let align = self.current_align();
+        match heading {
+            Some(level) => out.push(Block::Heading {
+                level,
+                inlines,
+                align,
+            }),
+            None => out.push(Block::Paragraph { inlines, align }),
+        }
+    }
+
+    /// The text gathered in `ctx` since the last block, `None` if blank;
+    /// `ctx` starts afresh, keeping the inline tags still open.
+    fn take_html_inlines(&mut self, ctx: &mut InlineCtx) -> Option<Vec<Inline>> {
         let fresh = InlineCtx {
             collapse_whitespace: true,
             html_style: ctx.html_style,
@@ -707,18 +762,7 @@ impl Builder {
         let finished = std::mem::replace(ctx, fresh);
         let mut inlines = finished.finish(self);
         trim_inlines(&mut inlines);
-        if inlines_are_blank(&inlines) {
-            return;
-        }
-        let align = self.current_align();
-        match heading {
-            Some(level) => out.push(Block::Heading {
-                level,
-                inlines,
-                align,
-            }),
-            None => out.push(Block::Paragraph { inlines, align }),
-        }
+        (!inlines_are_blank(&inlines)).then_some(inlines)
     }
 }
 
@@ -1839,5 +1883,48 @@ mod tests {
         assert!(doc.blocks.len() > 50);
         assert!(doc.headings.len() > 10);
         assert!(doc.has_code);
+    }
+
+    #[test]
+    fn details_become_a_summary_row_and_an_end_around_their_blocks() {
+        let doc = Document::parse(concat!(
+            "<details>\n<summary>More <b>info</b></summary>\n\n",
+            "Hidden *text*\n\n</details>\n\n",
+            "<details open><summary>Open</summary>Inline</details>\n\n",
+            "<details>\n\nNo summary\n\n</details>\n",
+        ));
+        let kinds: Vec<String> = doc
+            .blocks
+            .iter()
+            .map(|block| match block {
+                Block::Details {
+                    index,
+                    open,
+                    summary,
+                } => {
+                    let text = match summary.first() {
+                        Some(Inline::Text(rich)) => rich.text.as_str(),
+                        _ => "",
+                    };
+                    format!("details {index} {open} {text}")
+                }
+                Block::DetailsEnd => "end".to_owned(),
+                other => first_rich(other).text.clone(),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "details 0 false More info",
+                "Hidden text",
+                "end",
+                "details 1 true Open",
+                "Inline",
+                "end",
+                "details 2 false ",
+                "No summary",
+                "end",
+            ]
+        );
     }
 }

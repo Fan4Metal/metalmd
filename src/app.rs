@@ -41,6 +41,16 @@ pub fn request_repaint(cell: &CtxCell) {
     }
 }
 
+/// A task list item to tick, from tab `tab`. Ticks are written one at a
+/// time in order, so an undo finds the file its tick left.
+pub struct TaskJob {
+    tab: u64,
+    path: PathBuf,
+    task: Task,
+    /// Set for an undo: the digest the file must still have.
+    expect: Option<u64>,
+}
+
 /// A document read and parsed off the UI thread.
 pub struct Loaded {
     pub doc: Arc<Document>,
@@ -58,8 +68,8 @@ pub enum AppMsg {
     FileChanged(PathBuf),
     /// A task list item was ticked in this file, or could not be.
     TaskWritten {
-        path: PathBuf,
-        result: Result<(), String>,
+        job: TaskJob,
+        result: Result<Option<u64>, String>,
     },
     Fonts(Vec<(String, FontData)>),
     /// The system's font families, for the Text panel.
@@ -155,6 +165,9 @@ struct Tab {
     deleted: bool,
     /// Why ticking a task list item failed, until the next load.
     write_error: Option<String>,
+    /// Ticks made here, last last: each as the tick that undoes it and the
+    /// digest of the file it left.
+    undo: Vec<(Task, u64)>,
     view: ViewState,
     /// Anchor to scroll to once the document has loaded.
     pending_anchor: Option<String>,
@@ -182,6 +195,7 @@ impl Tab {
             lossy: false,
             deleted: false,
             write_error: None,
+            undo: Vec::new(),
             view: ViewState::default(),
             pending_anchor: None,
             restore: None,
@@ -373,6 +387,8 @@ pub struct App {
     window_moved: Option<Instant>,
     /// Ctrl+wheel notches not yet turned into zoom steps.
     wheel_zoom: f32,
+    /// The thread that writes ticks, started by the first one.
+    task_writer: Option<Sender<TaskJob>>,
 }
 
 impl App {
@@ -491,6 +507,7 @@ impl App {
             refresh_caption: false,
             window_moved: None,
             wheel_zoom: 0.0,
+            task_writer: None,
         }
     }
 
@@ -804,18 +821,35 @@ impl App {
             }
             AppMsg::FileChanged(path) => self.reload_path(&path),
             // Reloaded at once rather than when the watcher notices.
-            AppMsg::TaskWritten { path, result } => match result {
-                Ok(()) => self.reload_path(&path),
-                Err(error) => {
-                    for window in &mut self.windows {
-                        for tab in &mut window.tabs {
-                            if same_path(&tab.path, &path) {
-                                tab.write_error = Some(error.clone());
+            AppMsg::TaskWritten { job, result } => {
+                let undo = job.expect.is_some();
+                match result {
+                    Ok(written) => {
+                        if let (Some(digest), false, Some((w, t))) =
+                            (written, undo, self.find_tab(job.tab))
+                        {
+                            let task = Task {
+                                checked: !job.task.checked,
+                                ..job.task
+                            };
+                            self.windows[w].tabs[t].undo.push((task, digest));
+                        }
+                        self.reload_path(&job.path);
+                    }
+                    Err(error) => {
+                        for window in &mut self.windows {
+                            for tab in &mut window.tabs {
+                                if same_path(&tab.path, &job.path) {
+                                    tab.write_error = Some(error.clone());
+                                    // The file is not the one the ticks
+                                    // were made in any more.
+                                    tab.undo.clear();
+                                }
                             }
                         }
                     }
                 }
-            },
+            }
             AppMsg::Fonts(extra) => {
                 if !extra.is_empty() {
                     let extra: Vec<(String, Arc<FontData>)> = extra
@@ -921,8 +955,14 @@ impl App {
         let target = match action {
             ViewAction::OpenLink(target) => target,
             ViewAction::ToggleTask(task) => {
-                if let Some(path) = self.win().active_tab().map(|t| t.path.clone()) {
-                    self.toggle_task(path, task);
+                if let Some(tab) = self.win().active_tab() {
+                    let job = TaskJob {
+                        tab: tab.id,
+                        path: tab.path.clone(),
+                        task,
+                        expect: None,
+                    };
+                    self.write_task(job);
                 }
                 return;
             }
@@ -976,14 +1016,38 @@ impl App {
 
     /// Ticks or clears a task list item in the file, off the UI thread: the
     /// file may be on a slow disk or another computer.
-    fn toggle_task(&self, path: PathBuf, task: Task) {
-        let sender = self.sender.clone();
-        let cell = self.ctx_cell.clone();
-        std::thread::spawn(move || {
-            let result = crate::tasks::toggle(&path, task);
-            let _ = sender.send(AppMsg::TaskWritten { path, result });
-            request_repaint(&cell);
+    fn write_task(&mut self, job: TaskJob) {
+        let writer = self.task_writer.get_or_insert_with(|| {
+            let (jobs, queue) = std::sync::mpsc::channel::<TaskJob>();
+            let sender = self.sender.clone();
+            let cell = self.ctx_cell.clone();
+            std::thread::spawn(move || {
+                for job in queue {
+                    let result = crate::tasks::toggle(&job.path, job.task, job.expect);
+                    let _ = sender.send(AppMsg::TaskWritten { job, result });
+                    request_repaint(&cell);
+                }
+            });
+            jobs
         });
+        let _ = writer.send(job);
+    }
+
+    /// Undoes the last tick made in the active tab (Ctrl+Z).
+    fn undo_task(&mut self) {
+        let Some(tab) = self.win().active_tab_mut() else {
+            return;
+        };
+        let Some((task, digest)) = tab.undo.pop() else {
+            return;
+        };
+        let job = TaskJob {
+            tab: tab.id,
+            path: tab.path.clone(),
+            task,
+            expect: Some(digest),
+        };
+        self.write_task(job);
     }
 
     /// Opens a link's target, or asks first if it may run something or
@@ -1241,6 +1305,9 @@ impl App {
         // Reading keys, unless a text field has the keyboard.
         if ctx.egui_wants_keyboard_input() {
             return;
+        }
+        if consume(command(Key::Z)) {
+            self.undo_task();
         }
         let Some(tab) = self.win().active_tab_mut() else {
             return;

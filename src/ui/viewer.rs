@@ -23,6 +23,7 @@ use egui::{
     Margin, Rect, Response, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, Vec2, WidgetText,
     pos2, vec2,
 };
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -85,6 +86,14 @@ pub struct ViewState {
     hover: Option<(u32, u32)>,
     scroll_id: Option<Id>,
     measure_cursor: usize,
+    /// `<details>` (by `Block::Details::index`) the reader opened or
+    /// closed, the other way from how they are written. Kept across
+    /// reloads, so ticking a task inside one leaves it open.
+    details: HashSet<u32>,
+    /// Top-level blocks inside a closed `<details>`: drawn as nothing.
+    /// Empty when the document has none.
+    hidden: Vec<bool>,
+    hidden_stale: bool,
 }
 
 impl ViewState {
@@ -102,6 +111,7 @@ impl ViewState {
     fn prepare(&mut self, doc: &Document, width: f32, fonts: u64) {
         let identity = doc as *const Document as usize;
         if identity != self.doc_identity || self.heights.len() != doc.blocks.len() {
+            self.hidden_stale = true;
             self.doc_identity = identity;
             self.heights = doc.blocks.iter().map(|b| estimate(b, width)).collect();
             self.measured = vec![false; doc.blocks.len()];
@@ -117,6 +127,67 @@ impl ViewState {
             self.measured_width = width;
             self.measured_fonts = fonts;
         }
+        if self.hidden_stale {
+            self.hidden_stale = false;
+            self.update_hidden(doc, width);
+        }
+        // A jump into a closed `<details>` (find, the contents, a link)
+        // opens it.
+        if let Some((block, _)) = self.jump
+            && self.is_hidden(block)
+        {
+            self.reveal(doc, block);
+            self.hidden_stale = false;
+            self.update_hidden(doc, width);
+        }
+    }
+
+    fn is_hidden(&self, block: usize) -> bool {
+        self.hidden.get(block).copied().unwrap_or(false)
+    }
+
+    /// Takes the closed `<details>` into account: blocks they hide get no
+    /// height, blocks no longer hidden an estimate until measured.
+    fn update_hidden(&mut self, doc: &Document, width: f32) {
+        let hidden = hidden_blocks(&doc.blocks, &self.details).unwrap_or_default();
+        if hidden.is_empty() && self.hidden.is_empty() {
+            return;
+        }
+        for (i, block) in doc.blocks.iter().enumerate() {
+            if hidden.get(i).copied().unwrap_or(false) {
+                self.heights[i] = 0.0;
+                self.measured[i] = true;
+                self.waiting[i] = false;
+            } else if self.is_hidden(i) {
+                self.heights[i] = estimate(block, width);
+                self.measured[i] = false;
+            }
+        }
+        self.hidden = hidden;
+    }
+
+    /// Opens the closed `<details>` around top-level block `block`.
+    fn reveal(&mut self, doc: &Document, block: usize) {
+        let mut depth = 0usize;
+        for previous in doc.blocks[..block.min(doc.blocks.len())].iter().rev() {
+            match previous {
+                Block::DetailsEnd => depth += 1,
+                Block::Details { index, open, .. } if depth == 0 => {
+                    if !details_open(*index, *open, &self.details) {
+                        self.toggle_details(*index);
+                    }
+                }
+                Block::Details { .. } => depth -= 1,
+                _ => {}
+            }
+        }
+    }
+
+    fn toggle_details(&mut self, index: u32) {
+        if !self.details.remove(&index) {
+            self.details.insert(index);
+        }
+        self.hidden_stale = true;
     }
 
     fn compute_offsets(&self) -> Vec<f32> {
@@ -154,6 +225,10 @@ pub struct RenderCtx<'a> {
     /// A formula or diagram drawn since this was last cleared is still being
     /// made, so the block's height is not final.
     pending: bool,
+    /// `ViewState::details` while the document is drawn.
+    details: HashSet<u32>,
+    /// The `<details>` whose summary was clicked.
+    toggled: Option<u32>,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -178,6 +253,8 @@ impl<'a> RenderCtx<'a> {
             hover: None,
             new_hover: None,
             pending: false,
+            details: HashSet::new(),
+            toggled: None,
         }
     }
 }
@@ -198,6 +275,7 @@ pub fn show_document(
     view.prepare(doc, content_width, rc.fonts_generation);
     rc.hover = view.hover;
     rc.new_hover = None;
+    rc.details = std::mem::take(&mut view.details);
 
     let offsets = view.compute_offsets();
     let mut area = ScrollArea::vertical()
@@ -261,6 +339,10 @@ pub fn show_document(
         let mut y = offsets[first];
         let mut index = first;
         while index < count && y < viewport.max.y + 1.0 {
+            if view.is_hidden(index) {
+                index += 1;
+                continue;
+            }
             let rect = Rect::from_min_size(pos2(left, origin.y + y), vec2(content_width, 1.0e5));
             let height = draw_top_block(ui, doc, index, rect, rc, salt, false);
             view.heights[index] = height;
@@ -274,6 +356,10 @@ pub fn show_document(
         let mut remaining = view.measured.iter().filter(|m| !**m).count();
         let mut cursor = view.measure_cursor.min(count - 1);
         while remaining > 0 && started.elapsed() < MEASURE_BUDGET {
+            if view.is_hidden(cursor) {
+                view.heights[cursor] = 0.0;
+                view.measured[cursor] = true;
+            }
             if !view.measured[cursor] {
                 let rect = Rect::from_min_size(
                     pos2(left, origin.y + offsets[cursor]),
@@ -307,6 +393,11 @@ pub fn show_document(
     });
     view.scroll_id = Some(output.id);
     view.offsets = offsets;
+    view.details = std::mem::take(&mut rc.details);
+    if let Some(index) = rc.toggled.take() {
+        view.toggle_details(index);
+        ui.ctx().request_repaint();
+    }
     if view.hover != rc.new_hover {
         view.hover = rc.new_hover;
         ui.ctx().request_repaint();
@@ -360,17 +451,132 @@ fn draw_top_block(
 }
 
 fn draw_blocks(ui: &mut Ui, blocks: &[Block], rc: &mut RenderCtx<'_>, gap: f32, salt: u64) {
+    let hidden = hidden_blocks(blocks, &rc.details);
+    let mut first = true;
     for (i, block) in blocks.iter().enumerate() {
-        if i > 0 {
+        if hidden.as_ref().is_some_and(|hidden| hidden[i]) {
+            continue;
+        }
+        if !first {
             ui.add_space(gap);
         }
         draw_block(
             ui,
             block,
             rc,
-            i == 0,
+            first,
             salt.wrapping_mul(31).wrapping_add(i as u64 + 1),
         );
+        first = false;
+    }
+}
+
+/// Whether `<details>` number `index` is open: as written, unless the
+/// reader toggled it.
+fn details_open(index: u32, open: bool, toggled: &HashSet<u32>) -> bool {
+    open != toggled.contains(&index)
+}
+
+/// Which of `blocks` draw as nothing: those inside a closed `<details>`, and
+/// the `DetailsEnd` markers. `None` if there is no `<details>` among them.
+fn hidden_blocks(blocks: &[Block], toggled: &HashSet<u32>) -> Option<Vec<bool>> {
+    if !blocks
+        .iter()
+        .any(|b| matches!(b, Block::Details { .. } | Block::DetailsEnd))
+    {
+        return None;
+    }
+    // Whether each `<details>` around the block is open, and how many of
+    // them are closed.
+    let mut stack: Vec<bool> = Vec::new();
+    let mut closed = 0;
+    let hidden = blocks
+        .iter()
+        .map(|block| match block {
+            Block::Details { index, open, .. } => {
+                let hidden = closed > 0;
+                let open = details_open(*index, *open, toggled);
+                stack.push(open);
+                closed += usize::from(!open);
+                hidden
+            }
+            Block::DetailsEnd => {
+                if stack.pop() == Some(false) {
+                    closed -= 1;
+                }
+                true
+            }
+            _ => closed > 0,
+        })
+        .collect();
+    Some(hidden)
+}
+
+/// The `<summary>` row: a triangle and the summary, which opens or closes
+/// its `<details>` on a click anywhere in the row but on a link in it.
+fn draw_summary(
+    ui: &mut Ui,
+    index: u32,
+    open: bool,
+    summary: &[Inline],
+    rc: &mut RenderCtx<'_>,
+    salt: u64,
+) {
+    let actions = rc.actions.len();
+    let hover = rc.new_hover;
+    let row = ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let line = body_size() * LINE_HEIGHT;
+        let (marker, _) = ui.allocate_exact_size(vec2(body_size() * 1.25, line), Sense::hover());
+        // Centred a third of an em above the baseline, as list bullets are.
+        let baseline = marker.top() + rc.fonts.body_ascent * body_size();
+        let c = pos2(
+            marker.left() + body_size() * 0.4,
+            baseline - body_size() * 0.33,
+        );
+        let r = body_size() * 0.28;
+        let points = if open {
+            vec![
+                c + vec2(-r, -0.5 * r),
+                c + vec2(r, -0.5 * r),
+                c + vec2(0.0, r),
+            ]
+        } else {
+            vec![
+                c + vec2(-0.5 * r, -r),
+                c + vec2(r, 0.0),
+                c + vec2(-0.5 * r, r),
+            ]
+        };
+        let color = ui.visuals().text_color();
+        ui.painter()
+            .add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+        ui.vertical(|ui| {
+            if summary.is_empty() {
+                ui.label(RichText::new(tr!("Details", "Подробности")).size(body_size()));
+            } else {
+                draw_inlines(
+                    ui,
+                    summary,
+                    rc,
+                    body_size(),
+                    Style::NONE,
+                    Align::Left,
+                    salt,
+                    false,
+                );
+            }
+        });
+    });
+    let rect = Rect::from_min_max(
+        row.response.rect.min,
+        pos2(ui.max_rect().right(), row.response.rect.max.y),
+    );
+    if ui.is_visible() && ui.rect_contains_pointer(rect) && rc.new_hover == hover {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        if rc.actions.len() == actions && ui.input(|i| i.pointer.primary_clicked()) {
+            rc.toggled = Some(index);
+        }
     }
 }
 
@@ -435,6 +641,15 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             }
         }
         Block::Math { id, tex } => draw_display_math(ui, *id, tex, rc, salt),
+        Block::Details {
+            index,
+            open,
+            summary,
+        } => {
+            let open = details_open(*index, *open, &rc.details);
+            draw_summary(ui, *index, open, summary, rc, salt);
+        }
+        Block::DetailsEnd => {}
         Block::FrontMatter { id, yaml } => {
             egui::CollapsingHeader::new(
                 egui::RichText::new(tr!("Front matter", "Метаданные")).color(rc.palette.muted),
@@ -1898,6 +2113,8 @@ fn estimate(block: &Block, width: f32) -> f32 {
         Block::Table(table) => (table.rows.len() + 1) as f32 * (line + 8.0) + 16.0 + gap,
         Block::DefinitionList(items) => items.len() as f32 * line * 2.0 + gap,
         Block::Rule => body_size() + gap,
+        Block::Details { .. } => line + gap,
+        Block::DetailsEnd => 0.0,
     }
 }
 
@@ -1953,5 +2170,45 @@ mod tests {
             file_uri(Path::new(r"\\srv\share\a.png")),
             r"file://srv\share\a.png"
         );
+    }
+
+    #[test]
+    fn closed_details_hide_what_is_inside_them() {
+        let blocks: Vec<Block> = [
+            "a",
+            "<details open>",
+            "b",
+            "<details>",
+            "c",
+            "</details>",
+            "d",
+            "</details>",
+            "e",
+        ]
+        .iter()
+        .scan(0, |index, item| {
+            Some(match *item {
+                "<details>" | "<details open>" => {
+                    *index += 1;
+                    Block::Details {
+                        index: *index - 1,
+                        open: *item == "<details open>",
+                        summary: Vec::new(),
+                    }
+                }
+                "</details>" => Block::DetailsEnd,
+                _ => Block::Rule,
+            })
+        })
+        .collect();
+        let hidden = |toggled: &[u32]| {
+            let toggled: HashSet<u32> = toggled.iter().copied().collect();
+            hidden_blocks(&blocks, &toggled).unwrap()
+        };
+        let (f, t) = (false, true);
+        assert_eq!(hidden(&[]), [f, f, f, f, t, t, f, t, f]);
+        assert_eq!(hidden(&[1]), [f, f, f, f, f, t, f, t, f]);
+        assert_eq!(hidden(&[0]), [f, f, t, t, t, t, t, t, f]);
+        assert_eq!(hidden_blocks(&blocks[..1], &HashSet::new()), None);
     }
 }

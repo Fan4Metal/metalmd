@@ -2,16 +2,22 @@
 //! makes to a document. The file is read again, the mark is checked to be
 //! where the parse put it, and only that character is changed; the file is
 //! written back in the encoding it was read in, or not at all.
+//!
+//! A tick is undone by ticking again, but only in the file as it was
+//! written: changed by someone else since, its lines may have moved, and
+//! the same place may hold another item's box.
 
 use crate::fs_text::{self, UTF8_BOM_LABEL, UTF8_LABEL};
 use crate::markdown::document::Task;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 
-/// Ticks or clears `task` in the file at `path`. A task already as wanted
-/// (a second click before the reload) is left alone.
-pub fn toggle(path: &Path, task: Task) -> Result<(), String> {
+/// Ticks or clears `task` in the file at `path`, and gives the digest of
+/// what it wrote (`None` if the task already was as wanted: a second click
+/// before the reload). With `expect`, the file must still be the one of
+/// that digest.
+pub fn toggle(path: &Path, task: Task, expect: Option<u64>) -> Result<Option<u64>, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let decoded = fs_text::decode_text(&bytes);
     let unchanged = || {
         tr!(
             "The file has changed since it was shown.",
@@ -19,6 +25,10 @@ pub fn toggle(path: &Path, task: Task) -> Result<(), String> {
         )
         .to_owned()
     };
+    if expect.is_some_and(|digest| digest != digest_of(&bytes)) {
+        return Err(unchanged());
+    }
+    let decoded = fs_text::decode_text(&bytes);
     if decoded.lossy || encode(&decoded.content, &decoded.encoding).as_deref() != Some(&bytes) {
         return Err(tr!(
             "The file cannot be saved in its encoding without other changes.",
@@ -30,10 +40,17 @@ pub fn toggle(path: &Path, task: Task) -> Result<(), String> {
         return Err(unchanged());
     };
     if text == decoded.content {
-        return Ok(());
+        return Ok(None);
     }
     let out = encode(&text, &decoded.encoding).ok_or_else(unchanged)?;
-    std::fs::write(path, out).map_err(|e| e.to_string())
+    std::fs::write(path, &out).map_err(|e| e.to_string())?;
+    Ok(Some(digest_of(&out)))
+}
+
+fn digest_of(bytes: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// `text` with the mark of `task` set to its other state, `text` itself if
@@ -191,7 +208,7 @@ mod tests {
         for (name, bytes) in cases {
             let path = dir.join(name);
             std::fs::write(&path, &bytes).unwrap();
-            toggle(&path, task).unwrap();
+            toggle(&path, task, None).unwrap();
             let after = fs_text::decode_text(&std::fs::read(&path).unwrap());
             assert_eq!(after.content, "- [x] Задача\n", "{name}");
             assert_eq!(
@@ -200,6 +217,45 @@ mod tests {
                 "{name}: only the mark changes"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undoes_only_in_the_file_it_wrote() {
+        let dir = std::env::temp_dir().join(format!("metalmd-undo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("undo.md");
+        let text = "- [ ] one
+- [ ] two
+";
+        let [one, two] = tasks(text)[..] else {
+            panic!()
+        };
+        std::fs::write(&path, text).unwrap();
+        let after_one = toggle(&path, one, None).unwrap().unwrap();
+        let after_two = toggle(&path, two, None).unwrap().unwrap();
+        let back = |task: Task| Task {
+            checked: !task.checked,
+            ..task
+        };
+        // Undone in the opposite order, each in the file the tick left.
+        assert_eq!(
+            toggle(&path, back(two), Some(after_two)).unwrap(),
+            Some(after_one)
+        );
+        toggle(&path, back(one), Some(after_one)).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        // Edited since: a line above moves the boxes.
+        let after = toggle(&path, one, None).unwrap().unwrap();
+        std::fs::write(
+            &path,
+            "intro
+- [x] one
+- [ ] two
+",
+        )
+        .unwrap();
+        assert!(toggle(&path, back(one), Some(after)).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
