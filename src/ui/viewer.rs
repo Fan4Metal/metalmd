@@ -6,7 +6,7 @@
 //! out taller or shorter than estimated, so the text being read never jumps.
 
 use crate::markdown::document::{
-    AlertKind, Align, Block, Document, ImageRef, Inline, ListItem, Rich, Span, Style, Table,
+    AlertKind, Align, Block, Document, ImageRef, Inline, ListItem, Rich, Span, Style, Table, Task,
 };
 use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
@@ -48,6 +48,8 @@ const SETTLE_TIME: Duration = Duration::from_secs(1);
 #[derive(Debug, Clone, PartialEq)]
 pub enum ViewAction {
     OpenLink(String),
+    /// Tick or clear a task list item in the file.
+    ToggleTask(Task),
 }
 
 /// Per-tab layout and scroll state.
@@ -611,13 +613,23 @@ fn draw_list(
             let baseline = marker.top() + rc.fonts.body_ascent * body_size();
             let center_y = baseline - body_size() * 0.33;
             match item.task {
-                Some(checked) => {
+                Some(task) => {
                     let side = body_size() * 0.85;
                     let rect = Rect::from_center_size(
                         pos2(marker.right() - side / 2.0 - 6.0, center_y),
                         vec2(side, side),
                     );
-                    if checked {
+                    let response = ui
+                        .interact(
+                            rect.expand(3.0),
+                            ui.id().with(("task", task.line, task.column)),
+                            Sense::click(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if response.clicked() {
+                        rc.actions.push(ViewAction::ToggleTask(task));
+                    }
+                    if task.checked {
                         painter.rect_filled(rect, CornerRadius::same(3), rc.palette.accent);
                         let a = rect.left_center() + vec2(side * 0.22, 0.0);
                         let b = rect.center_bottom() + vec2(-side * 0.08, -side * 0.25);
@@ -626,10 +638,15 @@ fn draw_list(
                         painter.line_segment([a, b], stroke);
                         painter.line_segment([b, c], stroke);
                     } else {
+                        let color = if response.hovered() {
+                            rc.palette.accent
+                        } else {
+                            rc.palette.muted
+                        };
                         painter.rect_stroke(
                             rect,
                             CornerRadius::same(3),
-                            Stroke::new(1.5, rc.palette.muted),
+                            Stroke::new(1.5, color),
                             egui::StrokeKind::Inside,
                         );
                     }

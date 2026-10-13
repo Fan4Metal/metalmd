@@ -3,7 +3,7 @@
 use crate::bench::Bench;
 use crate::fonts::{Family, FontSpec};
 use crate::fs_text;
-use crate::markdown::document::{Block, Document, Scripts};
+use crate::markdown::document::{Block, Document, Scripts, Task};
 use crate::markdown::highlight::Highlighter;
 use crate::markdown::preprocess::{heading_anchor_id, is_markdown_path, percent_decode};
 use crate::settings::{Settings, ThemeSetting, TocSide, same_path};
@@ -56,6 +56,11 @@ pub enum AppMsg {
     },
     OpenPaths(Vec<PathBuf>),
     FileChanged(PathBuf),
+    /// A task list item was ticked in this file, or could not be.
+    TaskWritten {
+        path: PathBuf,
+        result: Result<(), String>,
+    },
     Fonts(Vec<(String, FontData)>),
     /// The system's font families, for the Text panel.
     FontList(Arc<Vec<Family>>),
@@ -148,6 +153,8 @@ struct Tab {
     encoding: String,
     lossy: bool,
     deleted: bool,
+    /// Why ticking a task list item failed, until the next load.
+    write_error: Option<String>,
     view: ViewState,
     /// Anchor to scroll to once the document has loaded.
     pending_anchor: Option<String>,
@@ -174,6 +181,7 @@ impl Tab {
             encoding: String::new(),
             lossy: false,
             deleted: false,
+            write_error: None,
             view: ViewState::default(),
             pending_anchor: None,
             restore: None,
@@ -700,6 +708,21 @@ impl App {
         );
     }
 
+    /// Reloads every tab showing the file at `path`.
+    fn reload_path(&mut self, path: &Path) {
+        let mut changed = Vec::new();
+        for (w, window) in self.windows.iter().enumerate() {
+            for (t, tab) in window.tabs.iter().enumerate() {
+                if same_path(&tab.path, path) {
+                    changed.push((w, t));
+                }
+            }
+        }
+        for (w, t) in changed {
+            self.reload(w, t);
+        }
+    }
+
     fn process_messages(&mut self, ctx: &egui::Context) {
         while let Ok(message) = self.receiver.try_recv() {
             self.handle_message(ctx, message);
@@ -738,6 +761,7 @@ impl App {
                         tab.lossy = loaded.lossy;
                         tab.error = None;
                         tab.deleted = false;
+                        tab.write_error = None;
                         let path = tab.path.clone();
                         self.windows[w].find.invalidate();
                         self.settings.add_recent(&path);
@@ -778,19 +802,20 @@ impl App {
                 self.open_paths(ctx, paths, true);
                 self.current = current;
             }
-            AppMsg::FileChanged(path) => {
-                let mut changed = Vec::new();
-                for (w, window) in self.windows.iter().enumerate() {
-                    for (t, tab) in window.tabs.iter().enumerate() {
-                        if same_path(&tab.path, &path) {
-                            changed.push((w, t));
+            AppMsg::FileChanged(path) => self.reload_path(&path),
+            // Reloaded at once rather than when the watcher notices.
+            AppMsg::TaskWritten { path, result } => match result {
+                Ok(()) => self.reload_path(&path),
+                Err(error) => {
+                    for window in &mut self.windows {
+                        for tab in &mut window.tabs {
+                            if same_path(&tab.path, &path) {
+                                tab.write_error = Some(error.clone());
+                            }
                         }
                     }
                 }
-                for (w, t) in changed {
-                    self.reload(w, t);
-                }
-            }
+            },
             AppMsg::Fonts(extra) => {
                 if !extra.is_empty() {
                     let extra: Vec<(String, Arc<FontData>)> = extra
@@ -893,7 +918,15 @@ impl App {
     }
 
     fn handle_action(&mut self, ctx: &egui::Context, action: ViewAction) {
-        let ViewAction::OpenLink(target) = action;
+        let target = match action {
+            ViewAction::OpenLink(target) => target,
+            ViewAction::ToggleTask(task) => {
+                if let Some(path) = self.win().active_tab().map(|t| t.path.clone()) {
+                    self.toggle_task(path, task);
+                }
+                return;
+            }
+        };
         let target = target.trim().to_owned();
         if let Some(fragment) = target.strip_prefix('#') {
             let Some(tab) = self.win().active_tab_mut() else {
@@ -938,6 +971,18 @@ impl App {
             LinkTarget::Markdown(resolved, fragment)
         } else {
             LinkTarget::File(resolved)
+        });
+    }
+
+    /// Ticks or clears a task list item in the file, off the UI thread: the
+    /// file may be on a slow disk or another computer.
+    fn toggle_task(&self, path: PathBuf, task: Task) {
+        let sender = self.sender.clone();
+        let cell = self.ctx_cell.clone();
+        std::thread::spawn(move || {
+            let result = crate::tasks::toggle(&path, task);
+            let _ = sender.send(AppMsg::TaskWritten { path, result });
+            request_repaint(&cell);
         });
     }
 
@@ -1396,6 +1441,9 @@ impl App {
                             if tab.deleted {
                                 status.push(tr!("file deleted", "файл удалён").to_owned());
                             }
+                            if tab.write_error.is_some() {
+                                status.push(tr!("not saved", "не сохранено").to_owned());
+                            }
                             if tab.lossy {
                                 status.push(
                                     tr!("decoding errors", "ошибки декодирования").to_owned(),
@@ -1405,11 +1453,21 @@ impl App {
                                 status.push(tab.encoding.clone());
                             }
                             if !status.is_empty() {
-                                ui.label(
+                                let label = ui.label(
                                     RichText::new(status.join(" · "))
                                         .size(12.0)
                                         .color(palette.muted),
                                 );
+                                if let Some(error) = &tab.write_error {
+                                    label.on_hover_text(format!(
+                                        "{}
+{error}",
+                                        tr!(
+                                            "The task list item was not ticked:",
+                                            "Пункт списка задач не отмечен:"
+                                        )
+                                    ));
+                                }
                             }
                         }
                     });

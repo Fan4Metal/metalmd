@@ -15,7 +15,7 @@
 
 <p align="center"><b>English</b> | <a href="README.ru.md">Русский</a></p>
 
-MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after you double-click it. It is a rewrite of the viewing half of [Markpad](https://github.com/sftwrdotdev/Markpad) in Rust. Markpad is built on Tauri and SvelteKit, so it starts WebView2 and loads a JavaScript bundle with Monaco, KaTeX and Mermaid. MetalMD draws the document itself with [egui](https://github.com/emilk/egui) and OpenGL, with no browser engine. It has no editor: open the file in your editor of choice, and MetalMD reloads the view each time you save.
+MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-click it. It is a rewrite of the viewing half of [Markpad](https://github.com/sftwrdotdev/Markpad) in Rust. Markpad is built on Tauri and SvelteKit, so it starts WebView2 and loads a JavaScript bundle with Monaco, KaTeX and Mermaid. MetalMD draws the document itself with [egui](https://github.com/emilk/egui) and OpenGL, with no browser engine. It has no editor: the file is edited in any other editor, and MetalMD reloads the view each time it is saved. The only change MetalMD makes to a file is ticking a task list item.
 
 ![MetalMD showing a document with a table of contents on the left, an alert, a task list, a table and a highlighted code block](images/screenshot.png)
 
@@ -35,6 +35,7 @@ MetalMD is a read-only Markdown viewer that shows a document about 0.2 s after y
 - **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
 - **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window. A tab dragged out of the window gets a window of its own, a tab dragged into another window joins it, and dragging along the bar rearranges them.
 - **Live reload**: a file changed on disk is reloaded at the same scroll position.
+- **Task lists can be ticked**: a click on a box switches `- [ ]` and `- [x]` in the file itself. Only that character changes; the encoding and line endings stay as they were.
 - **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied.
 - **Light, dark or system theme**, and zoom.
 - **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`).

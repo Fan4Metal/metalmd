@@ -117,9 +117,22 @@ pub enum AlertKind {
 
 #[derive(Clone, Debug)]
 pub struct ListItem {
-    /// `Some(checked)` for a task list item.
-    pub task: Option<bool>,
+    /// Set for a task list item.
+    pub task: Option<Task>,
     pub blocks: Vec<Block>,
+}
+
+/// The box of a task list item (`- [x]`), and where its mark is in the
+/// source, so `tasks::toggle` can tick it there. Preprocessing keeps lines
+/// and leaves alone what comes before the box on its line, so the position
+/// comrak gives in the preprocessed text is the same in the file's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Task {
+    pub checked: bool,
+    /// The line of the character between the brackets, from 1.
+    pub line: usize,
+    /// Its byte offset in the line, from 1.
+    pub column: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -458,7 +471,11 @@ impl Builder {
                 let mut items = Vec::new();
                 for item in node.children() {
                     let task = match &item.data().value {
-                        NodeValue::TaskItem(task) => Some(task.symbol.is_some()),
+                        NodeValue::TaskItem(task) => Some(Task {
+                            checked: task.symbol.is_some(),
+                            line: task.symbol_sourcepos.start.line,
+                            column: task.symbol_sourcepos.start.column,
+                        }),
                         _ => None,
                     };
                     let blocks = self.children_blocks(item);
@@ -1670,8 +1687,8 @@ mod tests {
         let Block::List { items, .. } = &doc.blocks[1] else {
             panic!("{:?}", doc.blocks[1])
         };
-        assert_eq!(items[0].task, Some(true));
-        assert_eq!(items[1].task, Some(false));
+        assert_eq!(items[0].task.map(|t| t.checked), Some(true));
+        assert_eq!(items[1].task.map(|t| t.checked), Some(false));
         let Block::Table(table) = &doc.blocks[2] else {
             panic!()
         };

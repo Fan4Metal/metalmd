@@ -22,6 +22,7 @@ mod placement;
 mod settings;
 mod single_instance;
 mod style;
+mod tasks;
 mod ui;
 mod watcher;
 
