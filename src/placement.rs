@@ -85,6 +85,30 @@ pub fn keep_on_screen(hwnd: isize) {
 #[cfg(not(windows))]
 pub fn keep_on_screen(_hwnd: isize) {}
 
+/// Restores window `hwnd` if it is minimized and puts it in front, for the
+/// files another launch hands over. Done with Win32 rather than viewport
+/// commands: eframe runs no frame for a minimized window, only
+/// `App::logic`, and winit does not focus a minimized window. Taking the
+/// focus is allowed because the launch that hands over calls
+/// `AllowSetForegroundWindow` (`single_instance::hand_off`).
+#[cfg(windows)]
+pub fn bring_to_front(hwnd: isize) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn IsIconic(hwnd: isize) -> i32;
+        fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
+        fn SetForegroundWindow(hwnd: isize) -> i32;
+    }
+    const SW_RESTORE: i32 = 9;
+    unsafe {
+        // A window minimized from maximized comes back maximized.
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        SetForegroundWindow(hwnd);
+    }
+}
+
 /// Where to put `window` so that its caption can be reached in `work`, or
 /// `None` if it already can be.
 fn placed(window: Rect, work: Rect) -> Option<Rect> {

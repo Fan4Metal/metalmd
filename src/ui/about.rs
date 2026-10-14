@@ -1,9 +1,10 @@
 //! The About dialog: icon, name, version, a short description, the author,
-//! the license, where the settings are kept, the interface language and the
-//! Markpad credit.
+//! the license, where the settings are kept, the interface language, the
+//! update check and the Markpad credit.
 
 use crate::i18n::LangChoice;
-use egui::{Key, TextureHandle};
+use crate::update::{Status, Updates, release_url, version_of};
+use egui::{Key, TextureHandle, Ui};
 
 const MARKPAD_URL: &str = "https://github.com/sftwrdotdev/Markpad";
 
@@ -27,7 +28,7 @@ impl About {
     /// Draws the dialog while it is open; closes it on the cross, Esc,
     /// Enter or a click outside (F1 is handled with the other shortcuts).
     /// A language picked in it is applied at once and left in `lang`.
-    pub fn show(&mut self, ctx: &egui::Context, lang: &mut LangChoice) {
+    pub fn show(&mut self, ctx: &egui::Context, lang: &mut LangChoice, updates: &mut Updates) {
         if !self.open {
             return;
         }
@@ -128,6 +129,10 @@ impl About {
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
+                update_section(ui, updates);
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
                 ui.weak(tr!(
                     "Markdown support is ported from",
                     "Поддержка Markdown перенесена из"
@@ -152,6 +157,74 @@ impl About {
                     || modal.should_close()));
         if closed {
             self.open = false;
+        }
+    }
+}
+
+/// The update check: the start-up option, a button to check now and the
+/// outcome.
+fn update_section(ui: &mut Ui, updates: &mut Updates) {
+    let before = updates.enabled;
+    ui.checkbox(
+        &mut updates.enabled,
+        tr!(
+            "Check for updates at start-up (once a day)",
+            "Проверять обновления при запуске (раз в сутки)"
+        ),
+    )
+    .on_hover_text(tr!(
+        "Asks api.github.com for the latest release; nothing else is sent, and nothing is downloaded",
+        "Запрашивает у api.github.com последний выпуск; больше ничего не отправляется и не скачивается"
+    ));
+    if updates.enabled && !before {
+        updates.start_if_due(ui.ctx());
+    }
+    let checking = updates.status == Status::Checking;
+    if ui
+        .add_enabled(
+            !checking,
+            egui::Button::new(tr!("Check now", "Проверить сейчас")),
+        )
+        .clicked()
+    {
+        updates.start(ui.ctx());
+    }
+    match &updates.status {
+        Status::Unknown => {}
+        Status::Checking => {
+            ui.horizontal(|ui| {
+                // Centred by hand, as the language list above.
+                ui.add_space(((ui.available_width() - 110.0) / 2.0).max(0.0));
+                ui.add(egui::Spinner::new());
+                ui.weak(tr!("Checking…", "Проверка…"));
+            });
+        }
+        Status::UpToDate => {
+            ui.weak(tr!(
+                "This is the latest version",
+                "Установлена последняя версия"
+            ));
+        }
+        Status::Newer(tag) => {
+            let version = version_of(tag);
+            let url = release_url(tag);
+            if ui
+                .link(tr!(
+                    format!("Version {version} is available"),
+                    format!("Доступна версия {version}")
+                ))
+                .on_hover_text(url.as_str())
+                .clicked()
+            {
+                let _ = open::that_detached(&url);
+            }
+        }
+        Status::Failed(e) => {
+            ui.weak(tr!(
+                "Could not check for updates",
+                "Не удалось проверить обновления"
+            ))
+            .on_hover_text(e);
         }
     }
 }

@@ -99,7 +99,7 @@ Right-click: left or right side",
 }
 
 /// Opens the Text panel (fonts and text size): a large and a small "A",
-/// drawn in lines like the other icons.
+/// drawn in lines like the other icons, with a rounded apex and round ends.
 pub fn text_button(ui: &mut Ui, open: bool) -> Response {
     use egui::{Stroke, pos2};
     let tip = tr!("Fonts and text size", "Шрифты и размер текста");
@@ -108,17 +108,16 @@ pub fn text_button(ui: &mut Ui, open: bool) -> Response {
         let at = |x: f32, y: f32| pos2(c.x + x, c.y + y);
         // (apex, left foot, right foot, crossbar height)
         for (apex, left, right, bar) in
-            [((-3.0, -6.0), -7.5, 1.5, 2.0), ((4.5, 0.0), 2.0, 7.0, 4.0)]
+            [((-3.0, -6.0), -7.0, 1.0, 2.0), ((4.5, -0.5), 2.0, 7.0, 3.8)]
         {
             let foot = 6.0;
-            painter.line(
-                vec![at(left, foot), at(apex.0, apex.1), at(right, foot)],
-                stroke,
-            );
+            let legs = [at(left, foot), at(apex.0, apex.1), at(right, foot)];
+            round_line(painter, rounded(&legs, &[0.0, 1.5, 0.0]), stroke);
             // Where the bar meets the legs.
             let t = (foot - bar) / (foot - apex.1);
-            painter.line_segment(
-                [
+            round_line(
+                painter,
+                vec![
                     at(left + (apex.0 - left) * t, bar),
                     at(right + (apex.0 - right) * t, bar),
                 ],
@@ -152,7 +151,7 @@ pub fn toc_side_menu(response: &Response, side: &mut TocSide) -> bool {
 }
 
 /// Opens files: the outline of an open folder, its tab on the top left and
-/// its front flap leaning forward.
+/// its front flap leaning forward, with rounded corners.
 pub fn open_button(ui: &mut Ui) -> Response {
     use egui::{Stroke, pos2};
     icon_button(
@@ -168,25 +167,102 @@ pub fn open_button(ui: &mut Ui) -> Response {
                     .collect()
             };
             let stroke = Stroke::new(1.3, color);
-            // The back with its tab, down to where the front flap starts.
-            painter.add(egui::epaint::PathShape::line(
-                at(&[
-                    (-6.5, 5.0),
-                    (-6.5, -5.0),
-                    (-2.0, -5.0),
-                    (-0.5, -3.0),
-                    (5.0, -3.0),
-                    (5.0, -0.5),
-                ]),
+            // The back with its tab, from where its rounded bottom left
+            // corner meets the front flap to where the flap's top is.
+            let back = at(&[
+                (-4.5, 5.0),
+                (-6.5, 5.0),
+                (-6.5, -5.0),
+                (-2.0, -5.0),
+                (-0.5, -3.0),
+                (5.0, -3.0),
+                (5.0, -0.5),
+            ]);
+            round_line(
+                painter,
+                rounded(&back, &[0.0, 2.0, 2.0, 1.2, 1.2, 2.0, 0.0]),
                 stroke,
-            ));
-            // The front flap, opened forward: a parallelogram leaning right.
-            painter.add(egui::epaint::PathShape::closed_line(
-                at(&[(-6.5, 5.0), (-3.5, -0.5), (7.0, -0.5), (4.5, 5.0)]),
-                stroke,
-            ));
+            );
+            // The front flap, opened forward: a parallelogram leaning right,
+            // sharp only where it leaves the back's corner.
+            let flap = at(&[
+                (-4.5, 5.0),
+                (-2.0, -0.5),
+                (7.0, -0.5),
+                (4.5, 5.0),
+                (-4.5, 5.0),
+            ]);
+            round_line(painter, rounded(&flap, &[0.0, 1.5, 1.5, 1.5, 0.0]), stroke);
         },
     )
+}
+
+/// The line through `points` with each corner cut `radius[i]` along both
+/// its sides (less on a short side) and bridged by a curve, so that a line
+/// icon looks drawn with a round pen; a radius of 0 keeps the point as it
+/// is, as for the ends. egui joins lines with sharp mitres, which look
+/// rough at 14 points.
+fn rounded(points: &[egui::Pos2], radius: &[f32]) -> Vec<egui::Pos2> {
+    const STEPS: usize = 6;
+    let n = points.len();
+    let mut out = Vec::with_capacity(n * (STEPS + 1));
+    for (i, (&p, &radius)) in points.iter().zip(radius).enumerate() {
+        if radius <= 0.0 || i == 0 || i == n - 1 {
+            out.push(p);
+            continue;
+        }
+        let (prev, next) = (points[i - 1], points[i + 1]);
+        let r = radius
+            .min((prev - p).length() / 2.0)
+            .min((next - p).length() / 2.0);
+        let start = p + (prev - p).normalized() * r;
+        let end = p + (next - p).normalized() * r;
+        // A quadratic Bézier with the corner as its control point.
+        for k in 0..=STEPS {
+            let t = k as f32 / STEPS as f32;
+            let u = 1.0 - t;
+            out.push(quadratic(start, p, end, u, t));
+        }
+    }
+    out
+}
+
+/// The point at `t` (with `u = 1 - t`) of the quadratic Bézier `a`, `b`, `c`.
+fn quadratic(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2, u: f32, t: f32) -> egui::Pos2 {
+    (a.to_vec2() * (u * u) + b.to_vec2() * (2.0 * u * t) + c.to_vec2() * (t * t)).to_pos2()
+}
+
+/// An open line with round ends: egui ends a stroke flat.
+fn round_line(painter: &egui::Painter, points: Vec<egui::Pos2>, stroke: egui::Stroke) {
+    for end in [points.first(), points.last()].into_iter().flatten() {
+        painter.circle_filled(*end, stroke.width / 2.0, stroke.color);
+    }
+    painter.add(egui::epaint::PathShape::line(points, stroke));
+}
+
+/// A newer release: its version with a download arrow (an arrow onto a
+/// tray) in the link colour; a click opens its release page. Shown left of
+/// About only while `Updates::newer` is `Some`, as in qview.
+pub fn update_button(ui: &mut Ui, tag: &str) -> Response {
+    use egui::{Stroke, vec2};
+    let version = crate::update::version_of(tag);
+    let id = ui.id().with("update_icon");
+    let resp =
+        egui::Button::new((egui::Atom::custom(id, egui::vec2(14.0, 14.0)), version)).atom_ui(ui);
+    let response = resp.response.clone().on_hover_text(tr!(
+        format!("Version {version} is available: open its release page"),
+        format!("Доступна версия {version}: открыть страницу выпуска")
+    ));
+    if let Some(rect) = resp.rect(id) {
+        let (c, painter) = (rect.center(), ui.painter());
+        let stroke = Stroke::new(1.5, ui.visuals().hyperlink_color);
+        let at = |x: f32, y: f32| c + vec2(x, y);
+        round_line(painter, vec![at(0.0, -5.5), at(0.0, 2.5)], stroke);
+        let head = [at(-4.0, -1.5), at(0.0, 2.5), at(4.0, -1.5)];
+        round_line(painter, rounded(&head, &[0.0, 1.0, 0.0]), stroke);
+        round_line(painter, vec![at(-5.5, 5.5), at(5.5, 5.5)], stroke);
+    }
+    response
 }
 
 /// Opens the About window: an "i" in a circle.

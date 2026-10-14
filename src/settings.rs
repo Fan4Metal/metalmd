@@ -76,6 +76,11 @@ pub struct Settings {
     pub mono_font: Option<FontSpec>,
     /// Body text size in points.
     pub text_size: f32,
+    /// Check for a newer release at start-up, at most once a day; off
+    /// until turned on in About.
+    pub check_updates: bool,
+    /// Unix seconds of the last update check that got an answer.
+    pub last_update_check: u64,
 }
 
 impl Default for Settings {
@@ -91,6 +96,8 @@ impl Default for Settings {
             font: None,
             mono_font: None,
             text_size: crate::style::DEFAULT_BODY_SIZE,
+            check_updates: false,
+            last_update_check: 0,
         }
     }
 }
@@ -296,5 +303,7 @@ mod tests {
         assert_eq!(settings.font, None);
         assert_eq!(settings.mono_font, None);
         assert_eq!(settings.text_size, crate::style::DEFAULT_BODY_SIZE);
+        assert!(!settings.check_updates);
+        assert_eq!(settings.last_update_check, 0);
     }
 }

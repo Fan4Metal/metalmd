@@ -24,7 +24,10 @@ mod single_instance;
 mod style;
 mod tasks;
 mod ui;
+mod update;
 mod watcher;
+#[cfg(windows)]
+mod win;
 
 use app::{App, AppMsg, Startup};
 use bench::Bench;

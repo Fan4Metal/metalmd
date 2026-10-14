@@ -20,6 +20,7 @@ use crate::ui::text::{TextChange, TextPanel};
 use crate::ui::toc;
 use crate::ui::viewer::Pictures;
 use crate::ui::viewer::{self, RenderCtx, ViewAction, ViewState};
+use crate::update::Updates;
 use crate::watcher::FileWatcher;
 use egui::{
     Align, CentralPanel, Color32, CursorIcon, FontData, FontDefinitions, FontId, Frame, Id, Key,
@@ -28,6 +29,7 @@ use egui::{
     ViewportCommand, ViewportId, vec2,
 };
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -389,6 +391,11 @@ pub struct App {
     wheel_zoom: f32,
     /// The thread that writes ticks, started by the first one.
     task_writer: Option<Sender<TaskJob>>,
+    /// Another launch handed over files: bring the window they open in to
+    /// the front. Set by the single-instance thread and taken in `logic`,
+    /// which runs while the window is minimized too.
+    raise: Arc<AtomicBool>,
+    updates: Updates,
 }
 
 impl App {
@@ -435,11 +442,14 @@ impl App {
             b.mark("fonts_ready");
         }
 
+        let raise = Arc::new(AtomicBool::new(false));
         if let Some(server) = startup.server {
             let sender = startup.sender.clone();
             let cell = startup.ctx_cell.clone();
+            let raise = Arc::clone(&raise);
             server.spawn(move |paths| {
                 let _ = sender.send(AppMsg::OpenPaths(paths));
+                raise.store(true, Ordering::Release);
                 request_repaint(&cell);
             });
         }
@@ -475,6 +485,11 @@ impl App {
             .collect();
         root.active = root.tabs.len().saturating_sub(1);
 
+        // Checked, if due, from the second frame on.
+        let updates = Updates::new(
+            startup.settings.check_updates,
+            startup.settings.last_update_check,
+        );
         App {
             windows: vec![root],
             current: 0,
@@ -508,6 +523,8 @@ impl App {
             window_moved: None,
             wheel_zoom: 0.0,
             task_writer: None,
+            raise,
+            updates,
         }
     }
 
@@ -578,16 +595,24 @@ impl App {
     }
 
     /// Opens `paths` in the current window.
-    fn open_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>, focus_window: bool) {
+    fn open_paths(&mut self, paths: Vec<PathBuf>) {
         for path in paths {
             let (path, anchor) = (normalize_path(&path), None);
             self.open_path(path, anchor);
         }
-        if focus_window {
-            let viewport = self.win().viewport;
-            ctx.send_viewport_cmd_to(viewport, ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd_to(viewport, ViewportCommand::Focus);
+    }
+
+    /// Restores and focuses the window that files handed over by another
+    /// launch open in (`AppMsg::OpenPaths`).
+    fn raise_window(&self, ctx: &egui::Context) {
+        let window = &self.windows[self.window_index(self.focused).unwrap_or(0)];
+        #[cfg(windows)]
+        if let Some(hwnd) = window.hwnd {
+            crate::placement::bring_to_front(hwnd);
+            return;
         }
+        ctx.send_viewport_cmd_to(window.viewport, ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd_to(window.viewport, ViewportCommand::Focus);
     }
 
     /// Opens `path` in a tab of the current window (or activates its tab,
@@ -816,7 +841,7 @@ impl App {
                 // Into the window the reader used last.
                 let current = self.current;
                 self.current = self.window_index(self.focused).unwrap_or(0);
-                self.open_paths(ctx, paths, true);
+                self.open_paths(paths);
                 self.current = current;
             }
             AppMsg::FileChanged(path) => self.reload_path(&path),
@@ -937,9 +962,26 @@ impl App {
         {
             self.highlighter.warm_up();
         }
+        if self.bench.is_none()
+            && let Some(ctx) = self.ctx_cell.get()
+        {
+            self.updates.start_if_due(ctx);
+        }
     }
 
-    fn open_dialog(&mut self, ctx: &egui::Context) {
+    /// Takes the answer of a finished update check and keeps the update
+    /// settings, changed by it or in About.
+    fn follow_updates(&mut self) {
+        self.updates.poll();
+        let (enabled, last) = (self.updates.enabled, self.updates.last_check);
+        if (enabled, last) != (self.settings.check_updates, self.settings.last_update_check) {
+            self.settings.check_updates = enabled;
+            self.settings.last_update_check = last;
+            self.settings_dirty = true;
+        }
+    }
+
+    fn open_dialog(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .add_filter("Markdown", &["md", "markdown", "mdown", "mkd", "txt"])
             .add_filter(tr!("All files", "Все файлы"), &["*"]);
@@ -947,7 +989,7 @@ impl App {
             dialog = dialog.set_directory(dir);
         }
         if let Some(paths) = dialog.pick_files() {
-            self.open_paths(ctx, paths, false);
+            self.open_paths(paths);
         }
     }
 
@@ -1254,7 +1296,7 @@ impl App {
             }
         }
         if consume(command(Key::O)) {
-            self.open_dialog(ctx);
+            self.open_dialog();
         }
         if consume(command(Key::W)) && !self.win().tabs.is_empty() {
             let active = self.win().active;
@@ -1470,6 +1512,11 @@ impl App {
                         if crate::ui::about_button(ui).clicked() {
                             self.toggle_about();
                         }
+                        if let Some(tag) = self.updates.newer().map(str::to_owned)
+                            && crate::ui::update_button(ui, &tag).clicked()
+                        {
+                            let _ = open::that_detached(crate::update::release_url(&tag));
+                        }
                         let theme = self.settings.theme;
                         if crate::ui::theme_button(ui, theme).clicked() {
                             self.settings.theme = theme.next();
@@ -1561,8 +1608,7 @@ impl App {
             None => {}
         }
         if open_dialog {
-            let ctx = ui.ctx().clone();
-            self.open_dialog(&ctx);
+            self.open_dialog();
         }
     }
 
@@ -1977,7 +2023,7 @@ impl App {
                 .collect()
         });
         if !dropped.is_empty() {
-            self.open_paths(&ctx, dropped, false);
+            self.open_paths(dropped);
         }
         self.track_drag(&ctx);
         self.handle_shortcuts(&ctx);
@@ -2095,7 +2141,8 @@ impl App {
             });
         if self.about_here() {
             let lang = self.settings.language;
-            self.about.show(&ctx, &mut self.settings.language);
+            self.about
+                .show(&ctx, &mut self.settings.language, &mut self.updates);
             if self.settings.language != lang {
                 self.settings_dirty = true;
             }
@@ -2120,7 +2167,7 @@ impl App {
             self.reload_by_hand(active);
         }
         match home_action {
-            Some(HomeAction::Open(path)) => self.open_paths(&ctx, vec![path], false),
+            Some(HomeAction::Open(path)) => self.open_paths(vec![path]),
             Some(HomeAction::ClearRecent) => {
                 self.settings.recent.clear();
                 self.settings_dirty = true;
@@ -2149,6 +2196,12 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.raise.swap(false, Ordering::Acquire) {
+            self.raise_window(ctx);
+        }
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.frame += 1;
@@ -2170,6 +2223,7 @@ impl eframe::App for App {
             self.fonts_generation += 1;
         }
         self.process_messages(&ctx);
+        self.follow_updates();
 
         self.current = 0;
         self.window_ui(ui);

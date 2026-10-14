@@ -42,6 +42,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 - **Any encoding**: UTF-8, UTF-16 and legacy code pages (Windows-1251, GBK, Shift_JIS and others) are detected automatically.
 - **One window**: a file opened while MetalMD is running goes to a new tab of the open window.
 - **Portable**: the [portable archive](#installation) keeps its settings next to the program.
+- **Optional update check**: off by default; see [Update check and privacy](#update-check-and-privacy).
 
 ## Supported Markdown
 
@@ -100,13 +101,15 @@ With the mouse: a code block shows a Copy button under the pointer, and the cont
 metalmd.exe [FILE...] [--new-instance]
 ```
 
-Each file opens in a tab. If MetalMD is already running, it receives the files and comes to the foreground; `--new-instance` opens a separate window instead.
+Each file opens in a tab. If MetalMD is already running, it receives the files and comes to the foreground, restored if it was minimized; `--new-instance` opens a separate window instead.
 
 Links to other Markdown files (`.md`, `.markdown`, `.mdown`, `.mkd`, `.txt`) open in a new tab, at the heading or block named after `#`. `#anchor` links scroll the document. Other links open in the default program.
 
-The theme, zoom, interface language, fonts and text size, the table of contents' visibility and side, window position and size, and the last nine files are saved between runs.
+The theme, zoom, interface language, fonts and text size, the table of contents' visibility and side, window position and size, the update check option, and the last nine files are saved between runs.
 
-The program does not access the network, except to load images that a document links over http(s).
+## Update check and privacy
+
+The update check is optional and off by default. With **Check for updates at start-up (once a day)** enabled in the About window (`F1`), the program asks the GitHub Releases API (`api.github.com`) for the latest release at most once a day, after the document is shown; **Check now** in the same window asks at once. The request carries nothing but the program version in its `User-Agent` header, and nothing is downloaded or installed: when a newer release exists, a button with its version appears at the right end of the toolbar, left of the About button, and opens the release page in the browser. Otherwise the program does not access the network, except to load images that a document links over http(s).
 
 ## File associations
 
@@ -173,6 +176,8 @@ src/
   fs_text.rs           reading and encoding detection (from Markpad)
   settings.rs          settings, recent files, portable mode
   single_instance.rs   one process per user: named pipe / local socket
+  update.rs            update check: the latest release from the GitHub API
+  win.rs               HTTPS GET through WinHTTP
   watcher.rs           file watching (notify)
   style.rs             colours, fonts, text size, egui visuals
   fonts.rs             the system's font families, a chosen family resolved to its faces
