@@ -1,6 +1,6 @@
 //! The About dialog: icon, name, version, a short description, the author,
-//! the license, where the settings are kept, the interface language, the
-//! update check and the Markpad credit.
+//! the license, the Markpad credit, where the settings are kept, the
+//! interface language and the update check.
 
 use crate::i18n::LangChoice;
 use crate::update::{Status, Updates, release_url, version_of};
@@ -85,6 +85,22 @@ impl About {
                         format!("Лицензия {LICENSE}")
                     ));
                 }
+                ui.add_space(6.0);
+                ui.weak(tr!(
+                    "Markdown support is ported from",
+                    "Поддержка Markdown перенесена из"
+                ));
+                if ui
+                    .link(tr!("Markpad by Alec Ames", "Markpad (автор Alec Ames)"))
+                    .on_hover_text(format!(
+                        "{MARKPAD_URL}\n{}",
+                        tr!("BSD 3-Clause License", "Лицензия BSD 3-Clause")
+                    ))
+                    .clicked()
+                {
+                    let _ = open::that_detached(MARKPAD_URL);
+                }
+                ui.add_space(6.0);
                 let stored = crate::settings::location();
                 let place = ui.weak(if stored.portable {
                     tr!(
@@ -130,23 +146,6 @@ impl About {
                 ui.separator();
                 ui.add_space(4.0);
                 update_section(ui, updates);
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
-                ui.weak(tr!(
-                    "Markdown support is ported from",
-                    "Поддержка Markdown перенесена из"
-                ));
-                if ui
-                    .link(tr!("Markpad by Alec Ames", "Markpad (автор Alec Ames)"))
-                    .on_hover_text(format!(
-                        "{MARKPAD_URL}\n{}",
-                        tr!("BSD 3-Clause License", "Лицензия BSD 3-Clause")
-                    ))
-                    .clicked()
-                {
-                    let _ = open::that_detached(MARKPAD_URL);
-                }
                 ui.add_space(4.0);
             });
             closed
