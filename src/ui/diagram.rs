@@ -49,14 +49,28 @@ fn render(source: &str, dark: u64, scale: f32) -> Result<Rendered<Vec2>, String>
     let svg = mermaid_svg::render_with(source, &theme).map_err(|e| e.to_string())?;
     let tree =
         resvg::usvg::Tree::from_str(&svg, super::svg::text_options()).map_err(|e| e.to_string())?;
-    let size = Vec2::new(tree.size().width(), tree.size().height());
+    let (origin, size) = drawn_area(&tree);
     let pixels = [
         (size.x * scale).ceil() as u32,
         (size.y * scale).ceil() as u32,
     ];
-    let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
+    let transform =
+        resvg::tiny_skia::Transform::from_scale(scale, scale).pre_translate(-origin.x, -origin.y);
     let image = super::render_cache::rasterize(&tree, transform, pixels)?;
     Ok(Rendered { image, meta: size })
+}
+
+/// The corner and the size of the area to draw: the SVG's own, grown to
+/// take in all it draws. mermaid-svg sizes it by the nodes, and the frame
+/// of a subgraph can reach past them, above the first one.
+fn drawn_area(tree: &resvg::usvg::Tree) -> (Vec2, Vec2) {
+    let bounds = tree.root().abs_stroke_bounding_box();
+    let own = tree.size();
+    let left = bounds.left().min(0.0);
+    let top = bounds.top().min(0.0);
+    let right = bounds.right().max(own.width());
+    let bottom = bounds.bottom().max(own.height());
+    (Vec2::new(left, top), Vec2::new(right - left, bottom - top))
 }
 
 #[cfg(test)]
@@ -93,6 +107,30 @@ mod tests {
             count += 1;
         }
         assert!(count >= 4, "{count}");
+    }
+
+    #[test]
+    fn a_subgraph_frame_past_the_nodes_is_drawn_whole() {
+        let source = "flowchart LR
+    subgraph S[\"1970s: cinema\"]
+        A[\"Studio\"]
+    end
+    A --> B([\"Star\"])
+";
+        let theme = mermaid_svg::Theme {
+            responsive: false,
+            ..mermaid_svg::Theme::default()
+        };
+        let svg = mermaid_svg::render_with(source, &theme).unwrap();
+        let tree = resvg::usvg::Tree::from_str(&svg, super::super::svg::text_options()).unwrap();
+        let frame = tree.root().abs_stroke_bounding_box();
+        let rendered = render(source, 0, 1.0).unwrap();
+        assert!(rendered.meta.x >= frame.width() && rendered.meta.y >= frame.height());
+        assert!(
+            rendered.meta.y > tree.size().height(),
+            "{frame:?} {:?}",
+            tree.size()
+        );
     }
 
     #[test]
