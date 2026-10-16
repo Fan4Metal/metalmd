@@ -2,6 +2,7 @@
 
 use crate::fonts::FontSpec;
 use crate::markdown::document::{AlertKind, Scripts};
+use crate::settings::DarkStyle;
 use egui::{Color32, FontData, FontDefinitions, FontFamily, Theme, Visuals};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,10 +75,16 @@ pub fn to_hex(color: Color32) -> String {
 /// Widest the text column gets, in points, before it is centered.
 pub const MAX_CONTENT_WIDTH: f32 = 880.0;
 
-/// Document colors for one theme (GitHub's palette).
+/// Document colors for one theme: GitHub's palette in the light one; in
+/// the dark one the neutral greys of metalmpv or GitHub's, nearly black
+/// ([`DarkStyle`]).
 #[derive(Clone, Debug)]
 pub struct Palette {
     pub dark: bool,
+    /// The page, and so panels and windows.
+    pub page: Color32,
+    /// The tab and find bars.
+    pub chrome: Color32,
     pub text: Color32,
     pub muted: Color32,
     pub link: Color32,
@@ -92,37 +99,58 @@ pub struct Palette {
 }
 
 impl Palette {
-    pub fn new(dark: bool) -> Palette {
-        if dark {
-            Palette {
+    pub fn new(dark: bool, dark_style: DarkStyle) -> Palette {
+        let rgb = Color32::from_rgb;
+        if !dark {
+            return Palette {
                 dark,
-                text: Color32::from_rgb(0xe6, 0xed, 0xf3),
-                muted: Color32::from_rgb(0x91, 0x98, 0xa1),
-                link: Color32::from_rgb(0x44, 0x93, 0xf8),
-                code_bg: Color32::from_rgb(0x2a, 0x30, 0x38),
-                code_block_bg: Color32::from_rgb(0x15, 0x1b, 0x23),
-                mark_bg: mark_presets(true)[0].0,
-                border: Color32::from_rgb(0x3d, 0x44, 0x4d),
-                quote_bar: Color32::from_rgb(0x3d, 0x44, 0x4d),
-                search_bg: Color32::from_rgb(0x6b, 0x4e, 0x0c),
-                search_current_bg: Color32::from_rgb(0xb0, 0x60, 0x10),
-                accent: Color32::from_rgb(0x44, 0x93, 0xf8),
-            }
-        } else {
-            Palette {
-                dark,
-                text: Color32::from_rgb(0x1f, 0x23, 0x28),
-                muted: Color32::from_rgb(0x59, 0x63, 0x6e),
-                link: Color32::from_rgb(0x09, 0x69, 0xda),
-                code_bg: Color32::from_rgb(0xec, 0xee, 0xf1),
-                code_block_bg: Color32::from_rgb(0xf6, 0xf8, 0xfa),
+                page: Color32::WHITE,
+                chrome: rgb(0xf6, 0xf8, 0xfa),
+                text: rgb(0x1f, 0x23, 0x28),
+                muted: rgb(0x59, 0x63, 0x6e),
+                link: rgb(0x09, 0x69, 0xda),
+                code_bg: rgb(0xec, 0xee, 0xf1),
+                code_block_bg: rgb(0xf6, 0xf8, 0xfa),
                 mark_bg: mark_presets(false)[0].0,
-                border: Color32::from_rgb(0xd1, 0xd9, 0xe0),
-                quote_bar: Color32::from_rgb(0xd1, 0xd9, 0xe0),
-                search_bg: Color32::from_rgb(0xff, 0xe0, 0x82),
-                search_current_bg: Color32::from_rgb(0xff, 0x9f, 0x43),
-                accent: Color32::from_rgb(0x09, 0x69, 0xda),
-            }
+                border: rgb(0xd1, 0xd9, 0xe0),
+                quote_bar: rgb(0xd1, 0xd9, 0xe0),
+                search_bg: rgb(0xff, 0xe0, 0x82),
+                search_current_bg: rgb(0xff, 0x9f, 0x43),
+                accent: rgb(0x09, 0x69, 0xda),
+            };
+        }
+        let blue = rgb(0x44, 0x93, 0xf8);
+        let palette = Palette {
+            dark,
+            page: rgb(0x0d, 0x11, 0x17),
+            chrome: rgb(0x01, 0x04, 0x09),
+            text: rgb(0xe6, 0xed, 0xf3),
+            muted: rgb(0x91, 0x98, 0xa1),
+            link: blue,
+            code_bg: rgb(0x2a, 0x30, 0x38),
+            code_block_bg: rgb(0x15, 0x1b, 0x23),
+            mark_bg: mark_presets(true)[0].0,
+            border: rgb(0x3d, 0x44, 0x4d),
+            quote_bar: rgb(0x3d, 0x44, 0x4d),
+            search_bg: rgb(0x6b, 0x4e, 0x0c),
+            search_current_bg: rgb(0xb0, 0x60, 0x10),
+            accent: blue,
+        };
+        match dark_style {
+            DarkStyle::Black => palette,
+            // The bars a shade darker than the page, as the title row of
+            // metalmpv.
+            DarkStyle::Grey => Palette {
+                page: rgb(0x20, 0x22, 0x27),
+                chrome: rgb(0x1c, 0x1e, 0x22),
+                text: rgb(0xd4, 0xd7, 0xdc),
+                muted: rgb(0x8a, 0x8f, 0x98),
+                code_bg: rgb(0x33, 0x36, 0x3d),
+                code_block_bg: rgb(0x29, 0x2c, 0x32),
+                border: rgb(0x3a, 0x3e, 0x46),
+                quote_bar: rgb(0x3a, 0x3e, 0x46),
+                ..palette
+            },
         }
     }
 
@@ -142,29 +170,20 @@ impl Palette {
     }
 }
 
-/// Applies the app's look to both egui themes.
-pub fn apply_visuals(ctx: &egui::Context) {
+/// Applies the app's look to both egui themes, the dark one in
+/// `dark_style`.
+pub fn apply_visuals(ctx: &egui::Context, dark_style: DarkStyle) {
     for theme in [Theme::Light, Theme::Dark] {
         ctx.style_mut_of(theme, |style| {
-            let palette = Palette::new(theme == Theme::Dark);
+            let palette = Palette::new(theme == Theme::Dark, dark_style);
             let mut visuals = if palette.dark {
                 Visuals::dark()
             } else {
                 Visuals::light()
             };
-            let background = if palette.dark {
-                Color32::from_rgb(0x0d, 0x11, 0x17)
-            } else {
-                Color32::WHITE
-            };
-            let chrome = if palette.dark {
-                Color32::from_rgb(0x01, 0x04, 0x09)
-            } else {
-                Color32::from_rgb(0xf6, 0xf8, 0xfa)
-            };
-            visuals.panel_fill = background;
-            visuals.window_fill = background;
-            visuals.extreme_bg_color = chrome;
+            visuals.panel_fill = palette.page;
+            visuals.window_fill = palette.page;
+            visuals.extreme_bg_color = palette.chrome;
             visuals.faint_bg_color = palette.code_block_bg;
             visuals.widgets.noninteractive.fg_stroke.color = palette.text;
             visuals.widgets.noninteractive.bg_stroke.color = palette.border;

@@ -472,7 +472,7 @@ impl App {
             b.mark("app_new");
         }
 
-        style::apply_visuals(&ctx);
+        style::apply_visuals(&ctx, startup.settings.dark_style);
         ctx.set_theme(startup.settings.theme.preference());
         // The window is still hidden (eframe shows it after the first
         // frame), so a caption set now is shown from the start; set after
@@ -1672,9 +1672,15 @@ impl App {
                             let _ = open::that_detached(crate::update::release_url(&tag));
                         }
                         let theme = self.settings.theme;
-                        if crate::ui::theme_button(ui, theme).clicked() {
+                        let theme_button = crate::ui::theme_button(ui, theme);
+                        if theme_button.clicked() {
                             self.settings.theme = theme.next();
                             ui.ctx().set_theme(self.settings.theme.preference());
+                            self.settings_dirty = true;
+                        }
+                        if crate::ui::dark_style_menu(&theme_button, &mut self.settings.dark_style)
+                        {
+                            style::apply_visuals(ui.ctx(), self.settings.dark_style);
                             self.settings_dirty = true;
                         }
                         let text_open = self.text_panel.open && self.text_panel.window == wid;
@@ -2176,7 +2182,7 @@ impl App {
         self.handle_shortcuts(&ctx);
 
         let dark = ctx.theme() == Theme::Dark;
-        let mut palette = Palette::new(dark);
+        let mut palette = Palette::new(dark, self.settings.dark_style);
         if let Some(color) = self.settings.mark_color(dark) {
             palette.mark_bg = color;
         }

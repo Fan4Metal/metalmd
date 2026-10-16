@@ -17,7 +17,7 @@ pub mod text;
 pub mod toc;
 pub mod viewer;
 
-use crate::settings::{ThemeSetting, TocSide};
+use crate::settings::{DarkStyle, ThemeSetting, TocSide};
 use egui::{Response, TextureHandle, TextureOptions, Ui};
 
 /// The app icon as a texture for `points` wide, from the smallest embedded
@@ -149,6 +149,29 @@ pub fn toc_side_menu(response: &Response, side: &mut TocSide) -> bool {
         }
     });
     *side != before
+}
+
+/// The context menu of the theme button: which of the two dark themes the
+/// dark one is. Returns `true` when it changed.
+pub fn dark_style_menu(response: &Response, style: &mut DarkStyle) -> bool {
+    let before = *style;
+    response.context_menu(|ui| {
+        for (value, label) in [
+            (
+                DarkStyle::Grey,
+                tr!("Dark theme: grey", "Тёмная тема: серая"),
+            ),
+            (
+                DarkStyle::Black,
+                tr!("Dark theme: black", "Тёмная тема: чёрная"),
+            ),
+        ] {
+            if ui.radio_value(style, value, label).clicked() {
+                ui.close();
+            }
+        }
+    });
+    *style != before
 }
 
 /// Opens files: the outline of an open folder, its tab on the top left and

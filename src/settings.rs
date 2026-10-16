@@ -40,6 +40,18 @@ impl ThemeSetting {
     }
 }
 
+/// Which of the two dark themes the dark one is, chosen in the context menu
+/// of the theme button.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DarkStyle {
+    /// Neutral greys, as metalmpv.
+    #[default]
+    Grey,
+    /// GitHub's, nearly black.
+    Black,
+}
+
 /// The side of the window the table of contents is on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -62,6 +74,7 @@ pub struct WindowGeometry {
 #[serde(default)]
 pub struct Settings {
     pub theme: ThemeSetting,
+    pub dark_style: DarkStyle,
     pub zoom: f32,
     pub toc_visible: bool,
     pub toc_side: TocSide,
@@ -92,6 +105,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             theme: ThemeSetting::System,
+            dark_style: DarkStyle::Grey,
             zoom: 1.0,
             toc_visible: true,
             toc_side: TocSide::Left,
@@ -311,6 +325,7 @@ mod tests {
     fn settings_round_trip_and_tolerate_unknown_fields() {
         let settings = Settings {
             theme: ThemeSetting::Dark,
+            dark_style: DarkStyle::Black,
             zoom: 1.25,
             toc_side: TocSide::Right,
             ..Settings::default()
@@ -336,6 +351,7 @@ mod tests {
         }"#;
         let settings: Settings = serde_json::from_str(old).unwrap();
         assert_eq!(settings.theme, ThemeSetting::Dark);
+        assert_eq!(settings.dark_style, DarkStyle::Grey);
         assert_eq!(settings.toc_side, TocSide::Right);
         assert_eq!(settings.recent, [PathBuf::from("/notes/a.md")]);
         assert_eq!(settings.font, None);
