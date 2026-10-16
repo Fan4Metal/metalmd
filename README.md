@@ -15,7 +15,7 @@
 
 <p align="center"><b>English</b> | <a href="README.ru.md">Русский</a></p>
 
-MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-click it. It is a rewrite of the viewing half of [Markpad](https://github.com/sftwrdotdev/Markpad) in Rust. Markpad is built on Tauri and SvelteKit, so it starts WebView2 and loads a JavaScript bundle with Monaco, KaTeX and Mermaid. MetalMD draws the document itself with [egui](https://github.com/emilk/egui) and OpenGL, with no browser engine. It has no editor: the file is edited in any other editor, and MetalMD reloads the view each time it is saved. The only change MetalMD makes to a file is ticking a task list item.
+MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-click it. It is a rewrite of the viewing half of [Markpad](https://github.com/sftwrdotdev/Markpad) in Rust. Markpad is built on Tauri and SvelteKit, so it starts WebView2 and loads a JavaScript bundle with Monaco, KaTeX and Mermaid. MetalMD draws the document itself with [egui](https://github.com/emilk/egui) and OpenGL, with no browser engine. It has no editor: the file is edited in any other editor, and MetalMD reloads the view each time it is saved. The only changes MetalMD makes to a file are ticking task list items and highlighting text.
 
 ![MetalMD showing a document with a table of contents on the left, an alert, a task list, a table and a highlighted code block](images/screenshot.png)
 
@@ -31,12 +31,13 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 - **Colour emoji**, drawn with the system emoji font (Segoe UI Emoji).
 - **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
 - **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` that opens and closes with a click on its summary, and other tags common in READMEs.
-- **Fonts and text size**: the Aa button opens a panel where the text font, the code font and the text size are chosen from the fonts installed in the system. Changes apply at once. Variable fonts get their bold and italic from their axes, and a family without italic is slanted.
+- **Fonts and text size**: the Aa button opens a panel where the text font, the code font and the text size are chosen from the fonts installed in the system, and the colour of highlighted text (`==…==`) from six or any other, separately for the light and the dark theme. Changes apply at once. Variable fonts get their bold and italic from their axes, and a family without italic is slanted.
 - **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
 - **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window. A tab dragged out of the window gets a window of its own, a tab dragged into another window joins it, and dragging along the bar rearranges them.
 - **Live reload**: a file changed on disk is reloaded at the same scroll position.
 - **Task lists can be ticked**: a click on a box switches `- [ ]` and `- [x]` in the file itself. Only that character changes; the encoding and line endings stay as they were. `Ctrl+Z` undoes the ticks one by one, as long as the file has not been changed by another program since.
-- **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied.
+- **Highlighting**: "Highlight" in the context menu of selected text, or `Ctrl+H`, wraps it in `==…==` in the file, each paragraph on its own; "Remove highlight" in the menu of highlighted text takes the marks away. `Ctrl+Z` undoes it as it undoes ticks.
+- **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied, as plain text or as the Markdown it was written in ("Copy as Markdown" in the context menu, `Ctrl+Shift+C`). A selection that starts or ends inside emphasis, a link or a formula takes in all of it, and one that starts a paragraph takes in its markup (`#`, `-`, `>`).
 - **Light, dark or system theme**, and zoom.
 - **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`).
 - **Any encoding**: UTF-8, UTF-16 and legacy code pages (Windows-1251, GBK, Shift_JIS and others) are detected automatically.
@@ -86,14 +87,17 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | `Esc` | Close find |
 | `Ctrl+Shift+O` | Show or hide the table of contents |
 | `F5`, `Ctrl+R` | Reload the file |
-| `Ctrl+Z` | Undo the last tick of a task list item |
+| `Ctrl+C` | Copy the selected text |
+| `Ctrl+Shift+C` | Copy the selection as Markdown |
+| `Ctrl+H` | Highlight the selection in the file |
+| `Ctrl+Z` | Undo the last tick of a task list item or highlight |
 | `Alt+←`, mouse Back button | Go back after following a link |
 | `Ctrl+=` / `Ctrl+−` / `Ctrl+0`, `Ctrl`+wheel | Zoom in, out, reset |
 | `PageUp`, `PageDown`, `Space` / `Shift+Space`, arrows | Scroll |
 | `Home`, `End` (`Ctrl+Home`, `Ctrl+End`) | Go to the start or the end |
 | `F1` | About |
 
-With the mouse: a code block shows a Copy button under the pointer, and the context menu of a `$$` formula or a diagram copies its source ("Copy TeX", "Copy Mermaid source"); the zoom shown next to the toolbar buttons resets it with a click; the contents button or panel chooses the side of the table of contents with a right click; a tab is moved along the bar, into another window or out into a new one by dragging its title, and its context menu does the same and also closes the other tabs.
+With the mouse: the context menu of selected text copies it as text or as Markdown and highlights it, and on highlighted text it also removes the highlight; a code block shows a Copy button under the pointer, and the context menu of a `$$` formula or a diagram copies its source ("Copy TeX", "Copy Mermaid source"); the zoom shown next to the toolbar buttons resets it with a click; the contents button or panel chooses the side of the table of contents with a right click; a tab is moved along the bar, into another window or out into a new one by dragging its title, and its context menu does the same and also closes the other tabs.
 
 ## Usage
 

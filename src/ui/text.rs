@@ -1,11 +1,14 @@
-//! The Text panel: the font of the document's text, the font of code and
-//! the text size. Changes apply at once, so the document behind the panel
-//! shows them.
+//! The Text panel: the font of the document's text, the font of code, the
+//! text size and the colour of highlighted text. Changes apply at once, so
+//! the document behind the panel shows them.
 
 use crate::fonts::Family;
 use crate::settings::Settings;
-use crate::style::{BODY_SIZES, DEFAULT_BODY_SIZE, DEFAULT_FAMILIES};
-use egui::{Align2, ComboBox, Id, PopupCloseBehavior, TextEdit, Ui, vec2};
+use crate::style::{BODY_SIZES, DEFAULT_BODY_SIZE, DEFAULT_FAMILIES, mark_presets};
+use egui::{
+    Align2, Color32, ComboBox, Id, PopupCloseBehavior, Response, Sense, Stroke, StrokeKind,
+    TextEdit, Ui, vec2,
+};
 use std::sync::Arc;
 
 /// What the reader changed in the panel.
@@ -16,7 +19,13 @@ pub enum TextChange {
         family: Option<Family>,
     },
     Size(f32),
-    /// Back to the default fonts and size.
+    /// The highlight colour of the dark or the light theme; `None` for the
+    /// theme's own.
+    MarkColor {
+        dark: bool,
+        color: Option<Color32>,
+    },
+    /// Back to the default fonts, size and highlight colours.
     Reset,
 }
 
@@ -75,11 +84,20 @@ impl TextPanel {
                             change = Some(TextChange::Size(size));
                         }
                         ui.end_row();
+
+                        ui.label(tr!("Highlight colour", "Цвет выделения"));
+                        let dark = ctx.theme() == egui::Theme::Dark;
+                        if let Some(color) = mark_colors(ui, settings, dark) {
+                            change = Some(TextChange::MarkColor { dark, color });
+                        }
+                        ui.end_row();
                     });
                 ui.add_space(4.0);
                 let default = settings.font.is_none()
                     && settings.mono_font.is_none()
-                    && settings.text_size == DEFAULT_BODY_SIZE;
+                    && settings.text_size == DEFAULT_BODY_SIZE
+                    && settings.mark_color.is_none()
+                    && settings.mark_color_dark.is_none();
                 if ui
                     .add_enabled(!default, egui::Button::new(tr!("Reset", "Сбросить")))
                     .clicked()
@@ -161,4 +179,49 @@ impl TextPanel {
             });
         change
     }
+}
+
+/// The highlight colours of the theme (`dark` or light) as swatches, the
+/// chosen one outlined, then a button for a colour of one's own. Gives the
+/// colour clicked: `Some(None)` for the theme's own.
+fn mark_colors(ui: &mut Ui, settings: &Settings, dark: bool) -> Option<Option<Color32>> {
+    let presets = mark_presets(dark);
+    let current = settings.mark_color(dark).unwrap_or(presets[0].0);
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        for (i, (color, name)) in presets.into_iter().enumerate() {
+            if swatch(ui, color, color == current)
+                .on_hover_text(name)
+                .clicked()
+            {
+                chosen = Some((i > 0).then_some(color));
+            }
+        }
+        let mut rgb = [current.r(), current.g(), current.b()];
+        let custom = ui
+            .color_edit_button_srgb(&mut rgb)
+            .on_hover_text(tr!("Another colour", "Другой цвет"));
+        if custom.changed() {
+            chosen = Some(Some(Color32::from_rgb(rgb[0], rgb[1], rgb[2])));
+        }
+    });
+    chosen
+}
+
+/// A square of `color` to click, outlined when `selected`.
+fn swatch(ui: &mut Ui, color: Color32, selected: bool) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+    let visuals = ui.visuals();
+    let stroke = if selected {
+        Stroke::new(2.0, visuals.strong_text_color())
+    } else if response.hovered() {
+        Stroke::new(1.0, visuals.widgets.hovered.fg_stroke.color)
+    } else {
+        Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color)
+    };
+    ui.painter().rect_filled(rect, 4.0, color);
+    ui.painter()
+        .rect_stroke(rect, 4.0, stroke, StrokeKind::Inside);
+    response
 }

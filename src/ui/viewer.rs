@@ -10,14 +10,15 @@ use crate::markdown::document::{
 };
 use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
+use crate::markdown::source::{self, Part, Selected};
 use crate::style::{FontChoice, MAX_CONTENT_WIDTH, Palette, body_size};
 use crate::ui::diagram::DiagramRenderer;
 use crate::ui::emoji::EmojiRenderer;
 use crate::ui::find::{FindState, Match};
 use crate::ui::math::MathRenderer;
 use crate::ui::render_cache::{Metrics, Picture, State};
+use crate::ui::selection;
 use egui::text::{LayoutJob, TextFormat};
-use egui::text_selection::LabelSelectionState;
 use egui::{
     Color32, CornerRadius, CursorIcon, FontFamily, FontId, Frame, Galley, Id, Label, Layout,
     Margin, Rect, Response, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, Vec2, WidgetText,
@@ -51,6 +52,21 @@ pub enum ViewAction {
     OpenLink(String),
     /// Tick or clear a task list item in the file.
     ToggleTask(Task),
+    /// Copy the selection as the Markdown it was written in.
+    CopyMarkdown,
+    /// Highlight the selection in the file (`==text==`).
+    Highlight,
+    /// Remove the highlights the selection touches, or with none the one
+    /// the context menu was opened on.
+    Unhighlight,
+}
+
+/// The text a context menu was opened on: the place under the pointer, and
+/// whether it is highlighted.
+#[derive(Clone, Debug)]
+pub struct MenuPoint {
+    pub at: Selected,
+    pub marked: bool,
 }
 
 /// Per-tab layout and scroll state.
@@ -94,9 +110,25 @@ pub struct ViewState {
     /// Empty when the document has none.
     hidden: Vec<bool>,
     hidden_stale: bool,
+    /// What of the document was selected when it was last drawn, in
+    /// document order.
+    selected: Vec<Selected>,
+    /// Some of the selection is highlighted.
+    selected_marks: bool,
+    menu_point: Option<MenuPoint>,
 }
 
 impl ViewState {
+    /// What of the document is selected, in document order.
+    pub fn selection(&self) -> &[Selected] {
+        &self.selected
+    }
+
+    /// The text the last context menu was opened on.
+    pub fn menu_point(&self) -> Option<&MenuPoint> {
+        self.menu_point.as_ref()
+    }
+
     /// Scroll position to keep across a reload: first visible block and the
     /// offset into it.
     pub fn reading_position(&self) -> Option<(usize, f32)> {
@@ -229,6 +261,14 @@ pub struct RenderCtx<'a> {
     details: HashSet<u32>,
     /// The `<details>` whose summary was clicked.
     toggled: Option<u32>,
+    /// What is selected in the text drawn so far.
+    selected: Vec<Selected>,
+    selected_marks: bool,
+    /// From the last frame: text is selected, and some of it highlighted.
+    had_selection: bool,
+    had_marks: bool,
+    /// `ViewState::menu_point` while the document is drawn.
+    menu_point: Option<MenuPoint>,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -255,7 +295,22 @@ impl<'a> RenderCtx<'a> {
             pending: false,
             details: HashSet::new(),
             toggled: None,
+            selected: Vec::new(),
+            selected_marks: false,
+            had_selection: false,
+            had_marks: false,
+            menu_point: None,
         }
+    }
+
+    /// Notes that `range` (bytes) of `text`, the text of `part`, is selected.
+    fn select(&mut self, part: Part, text: &str, range: std::ops::Range<usize>, marked: bool) {
+        self.selected_marks |= marked;
+        self.selected.push(Selected {
+            part,
+            range,
+            digest: source::digest(text),
+        });
     }
 }
 
@@ -276,6 +331,9 @@ pub fn show_document(
     rc.hover = view.hover;
     rc.new_hover = None;
     rc.details = std::mem::take(&mut view.details);
+    rc.had_selection = !view.selected.is_empty();
+    rc.had_marks = view.selected_marks;
+    rc.menu_point = view.menu_point.take();
 
     let offsets = view.compute_offsets();
     let mut area = ScrollArea::vertical()
@@ -394,6 +452,9 @@ pub fn show_document(
     view.scroll_id = Some(output.id);
     view.offsets = offsets;
     view.details = std::mem::take(&mut rc.details);
+    view.selected = std::mem::take(&mut rc.selected);
+    view.selected_marks = std::mem::take(&mut rc.selected_marks);
+    view.menu_point = rc.menu_point.take();
     if let Some(index) = rc.toggled.take() {
         view.toggle_details(index);
         ui.ctx().request_repaint();
@@ -677,7 +738,11 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
                     .color(color)
                     .size(body_size())
                     .family(rc.fonts.bold.clone());
-                ui.add(Label::new(title).selectable(true));
+                let (pos, galley, response) = Label::new(title).selectable(true).layout_in_ui(ui);
+                if ui.is_rect_visible(response.rect) {
+                    selection::label(ui, &response, pos, galley, color, Stroke::NONE);
+                }
+                text_menu(&response, rc, false);
                 ui.add_space(4.0);
                 draw_blocks(ui, blocks, rc, block_gap(), salt);
             });
@@ -1613,19 +1678,57 @@ fn draw_rich_rows(
     } = rich_job(rich, rc, ui, size, extra);
     let label = Label::new(WidgetText::LayoutJob(Arc::new(job))).selectable(true);
     let (pos, galley, response) = label.layout_in_ui(ui);
+    // The byte of `rich.text` at character `index` of the job.
+    let byte_at = |index: usize| match &char_bytes {
+        Some(bytes) => bytes.get(index).copied().unwrap_or(rich.text.len()),
+        None => rich
+            .text
+            .char_indices()
+            .nth(index)
+            .map_or(rich.text.len(), |(byte, _)| byte),
+    };
     if ui.is_rect_visible(response.rect) {
-        LabelSelectionState::label_text_selection(
-            ui,
-            &response,
-            pos,
-            Arc::clone(&galley),
-            ui.visuals().text_color(),
-            Stroke::NONE,
-        );
+        let color = ui.visuals().text_color();
+        let shown = Arc::clone(&galley);
+        if let Some(range) = selection::label(ui, &response, pos, shown, color, Stroke::NONE) {
+            let range = range.as_sorted_char_range();
+            let bytes = byte_at(range.start.0)..byte_at(range.end.0);
+            let marked = rich.spans.iter().any(|span| {
+                span.style.has(Style::MARK)
+                    && span.range.start < bytes.end
+                    && bytes.start < span.range.end
+            });
+            rc.select(Part::Text(rich.id), &rich.text, bytes, marked);
+        }
         if !pictures.is_empty() {
             paint_inline_pictures(ui, &galley, pos, &pictures, rc, size);
         }
     }
+    if response.secondary_clicked() {
+        rc.menu_point = response
+            .interact_pointer_pos()
+            .and_then(|pointer| char_under(&galley, pointer - pos))
+            .map(|index| {
+                let at = byte_at(index);
+                let marked = rich
+                    .spans
+                    .iter()
+                    .any(|s| s.style.has(Style::MARK) && s.range.contains(&at));
+                MenuPoint {
+                    at: Selected {
+                        part: Part::Text(rich.id),
+                        range: at..at,
+                        digest: source::digest(&rich.text),
+                    },
+                    marked,
+                }
+            });
+    }
+    let on_mark = rc
+        .menu_point
+        .as_ref()
+        .is_some_and(|p| p.marked && p.at.part == Part::Text(rich.id));
+    text_menu(&response, rc, on_mark);
     if !rich.links.is_empty() {
         let hovered = response
             .hover_pos()
@@ -1653,6 +1756,51 @@ fn draw_rich_rows(
         }
     }
     (response, galley.rows.len())
+}
+
+/// The context menu of selectable text: copying the selection, as text or
+/// as Markdown, and highlighting it. Opened only where it has something to
+/// do: with text selected, or (`on_mark`) on highlighted text.
+fn text_menu(response: &Response, rc: &mut RenderCtx<'_>, on_mark: bool) {
+    let selected = rc.had_selection;
+    if !selected && !on_mark {
+        return;
+    }
+    let item = |ui: &mut Ui, enabled: bool, text: &str, shortcut: &str| {
+        let button = egui::Button::new(text).shortcut_text(shortcut);
+        ui.add_enabled(enabled, button).clicked()
+    };
+    response.context_menu(|ui| {
+        if item(ui, selected, tr!("Copy", "Копировать"), "Ctrl+C") {
+            selection::copy(ui.ctx());
+            ui.close();
+        }
+        if item(
+            ui,
+            selected,
+            tr!("Copy as Markdown", "Копировать как Markdown"),
+            "Ctrl+Shift+C",
+        ) {
+            rc.actions.push(ViewAction::CopyMarkdown);
+            ui.close();
+        }
+        ui.separator();
+        if item(ui, selected, tr!("Highlight", "Выделить цветом"), "Ctrl+H") {
+            rc.actions.push(ViewAction::Highlight);
+            ui.close();
+        }
+        if (rc.had_marks || on_mark)
+            && item(
+                ui,
+                true,
+                tr!("Remove highlight", "Снять выделение цветом"),
+                "",
+            )
+        {
+            rc.actions.push(ViewAction::Unhighlight);
+            ui.close();
+        }
+    });
 }
 
 /// A `$$ … $$` block: the formula centred, scrolled sideways when wider than
@@ -2009,15 +2157,22 @@ fn draw_code(
                         .extend();
                     let (pos, galley, response) = label.layout_in_ui(ui);
                     if ui.is_rect_visible(response.rect) {
-                        LabelSelectionState::label_text_selection(
-                            ui,
-                            &response,
-                            pos,
-                            galley,
-                            rc.palette.text,
-                            Stroke::NONE,
-                        );
+                        let text = galley.text();
+                        let byte_at = |index: usize| {
+                            let at = text.char_indices().nth(index).map_or(text.len(), |c| c.0);
+                            at.min(code.len())
+                        };
+                        let color = rc.palette.text;
+                        let shown = Arc::clone(&galley);
+                        let selected =
+                            selection::label(ui, &response, pos, shown, color, Stroke::NONE);
+                        if let Some(range) = selected {
+                            let range = range.as_sorted_char_range();
+                            let bytes = byte_at(range.start.0)..byte_at(range.end.0);
+                            rc.select(Part::Code(id), code, bytes, false);
+                        }
                     }
+                    text_menu(&response, rc, false);
                 });
         });
     let rect = frame.response.rect;

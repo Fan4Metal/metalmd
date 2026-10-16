@@ -5,7 +5,8 @@
 //! thread and the module is testable without a window.
 
 use super::html::{self, Token};
-use super::preprocess::{self, BLOCK_ID_ANCHOR_CLASS, EMBED_SIZE_TITLE_PREFIX};
+use super::preprocess::{self, BLOCK_ID_ANCHOR_CLASS, EMBED_SIZE_TITLE_PREFIX, Rewrite};
+use super::source::{InlineTrack, Sources, Tracker};
 use comrak::nodes::{AlertType, ListType, Node, NodeValue, TableAlignment};
 use comrak::{Anchorizer, Arena, parse_document};
 use std::collections::HashMap;
@@ -123,7 +124,7 @@ pub struct ListItem {
 }
 
 /// The box of a task list item (`- [x]`), and where its mark is in the
-/// source, so `tasks::toggle` can tick it there. Preprocessing keeps lines
+/// source, so `edit::apply` can tick it there. Preprocessing keeps lines
 /// and leaves alone what comes before the box on its line, so the position
 /// comrak gives in the preprocessed text is the same in the file's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,13 +249,36 @@ pub struct Document {
 impl Document {
     /// Parses `source` (already decoded) into the render model.
     pub fn parse(source: &str) -> Document {
+        Document::build(source, false).0
+    }
+
+    /// [`Document::parse`], also keeping where its text is in `source`
+    /// (see `markdown::source`).
+    pub(crate) fn parse_with_sources(source: &str) -> (Document, Sources) {
+        let (doc, sources) = Document::build(source, true);
+        (doc, sources.expect("kept when asked"))
+    }
+
+    fn build(source: &str, track: bool) -> (Document, Option<Sources>) {
+        let mut passes = Vec::new();
+        if track {
+            passes.push(copy_marker_rewrites(source));
+        }
         let source = &*without_copy_markers(source);
-        let preprocessed = preprocess::preprocess(source);
+        let (preprocessed, rewrites) = if track {
+            let (text, rewrites) = preprocess::preprocess_with_rewrites(source);
+            (text, Some(rewrites))
+        } else {
+            (preprocess::preprocess(source), None)
+        };
         let arena = Arena::new();
         let options = preprocess::markdown_options();
         let root = parse_document(&arena, &preprocessed, &options);
 
-        let mut builder = Builder::default();
+        let mut builder = Builder {
+            track: track.then(|| Box::new(Tracker::new(&preprocessed))),
+            ..Builder::default()
+        };
         // Footnote numbers are assigned in reference order; definitions come
         // last in comrak's tree, so collect the numbers first.
         for node in root.descendants() {
@@ -270,7 +294,14 @@ impl Document {
             builder.top = blocks.len();
             builder.block(child, &mut blocks);
         }
-        Document {
+        let sources = builder.track.take().map(|tracker| {
+            passes.extend(rewrites.into_iter().flatten());
+            Sources {
+                tracker: *tracker,
+                passes,
+            }
+        });
+        let doc = Document {
             blocks,
             headings: builder.headings,
             anchors: builder.anchors,
@@ -278,8 +309,21 @@ impl Document {
             images: builder.images.into_iter().collect(),
             has_code: builder.has_code,
             scripts: detect_scripts(source),
-        }
+        };
+        (doc, sources)
     }
+}
+
+/// The copy markers [`without_copy_markers`] takes out, as rewrites.
+fn copy_marker_rewrites(source: &str) -> Vec<Rewrite> {
+    source
+        .char_indices()
+        .filter(|&(_, c)| matches!(c, '\u{2062}'..='\u{2064}'))
+        .map(|(at, c)| Rewrite {
+            from: at..at + c.len_utf8(),
+            len: 0,
+        })
+        .collect()
 }
 
 /// The invisible operators U+2062–U+2064, which `ui::copy` marks pictures
@@ -351,6 +395,12 @@ struct Builder {
     base_style: Style,
     /// `<details>` built so far.
     details: u32,
+    /// Places in the source, kept for `markdown::source` only.
+    track: Option<Box<Tracker>>,
+    /// The block being built, when places are kept.
+    block_source: Option<Range<usize>>,
+    /// The HTML block being built, when places are kept.
+    html_source: Option<Range<usize>>,
 }
 
 impl Builder {
@@ -399,11 +449,15 @@ impl Builder {
     /// index the first pushed block will get.
     fn block<'a>(&mut self, node: Node<'a>, out: &mut Vec<Block>) {
         let data = node.data();
+        if let Some(track) = &self.track {
+            self.block_source = Some(track.range(&data.sourcepos));
+        }
         match &data.value {
             NodeValue::FrontMatter(raw) => {
                 let yaml = strip_front_matter_fences(raw);
                 let id = self.alloc_id();
                 self.add_search(id, &yaml);
+                self.track_block(id);
                 out.push(Block::FrontMatter { id, yaml });
             }
             NodeValue::Paragraph => {
@@ -455,7 +509,9 @@ impl Builder {
             NodeValue::HtmlBlock(html_block) => {
                 let literal = html_block.literal.clone();
                 drop(data);
+                self.html_source = self.block_source.clone();
                 self.html_block(&literal, out);
+                self.html_source = None;
             }
             NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => {
                 drop(data);
@@ -583,6 +639,7 @@ impl Builder {
 
     fn inlines<'a>(&mut self, node: Node<'a>) -> Vec<Inline> {
         let mut ctx = InlineCtx::new(self.base_style);
+        ctx.track = self.track.as_ref().map(|_| Box::default());
         for child in node.children() {
             ctx.node(self, child, Style::NONE);
         }
@@ -600,6 +657,7 @@ impl Builder {
         }
         let id = self.alloc_id();
         self.add_search(id, &code);
+        self.track_block(id);
         self.has_code = true;
         let key = super::highlight::code_key(&lang, &code);
         out.push(Block::Code {
@@ -623,8 +681,16 @@ impl Builder {
         self.push_code(lang, code, out);
     }
 
+    /// Notes that block `id` (code or front matter) is the one being built.
+    fn track_block(&mut self, id: u32) {
+        if let (Some(track), Some(source)) = (&mut self.track, &self.block_source) {
+            track.blocks.insert(id, source.clone());
+        }
+    }
+
     fn html_block(&mut self, literal: &str, out: &mut Vec<Block>) {
         let mut ctx = InlineCtx::new(self.base_style);
+        ctx.track = self.track.as_ref().map(|_| Box::default());
         ctx.collapse_whitespace = true;
         let mut heading: Option<u8> = None;
         // Inside `<pre>`: its language and its text so far, as written.
@@ -757,6 +823,7 @@ impl Builder {
             html_styles: std::mem::take(&mut ctx.html_styles),
             html_links: std::mem::take(&mut ctx.html_links),
             link: ctx.link.clone(),
+            track: ctx.track.as_ref().map(|_| Box::default()),
             ..InlineCtx::new(ctx.base)
         };
         let finished = std::mem::replace(ctx, fresh);
@@ -893,6 +960,8 @@ struct InlineCtx {
     collapse_whitespace: bool,
     /// Inline nodes open around the one being added.
     depth: usize,
+    /// Where the text came from, when the builder keeps it.
+    track: Option<Box<InlineTrack>>,
 }
 
 impl InlineCtx {
@@ -907,6 +976,7 @@ impl InlineCtx {
             link: None,
             collapse_whitespace: false,
             depth: 0,
+            track: None,
         }
     }
 
@@ -1010,6 +1080,10 @@ impl InlineCtx {
         let mut rich = std::mem::take(&mut self.cur);
         rich.id = builder.alloc_id();
         builder.add_search(rich.id, &rich.text);
+        if let (Some(track), Some(tracker)) = (&mut self.track, &mut builder.track) {
+            let source = track.take(builder.html_source.clone());
+            tracker.rich.insert(rich.id, source);
+        }
         self.parts.push(Inline::Text(rich));
     }
 
@@ -1041,6 +1115,55 @@ impl InlineCtx {
     }
 
     fn node<'a>(&mut self, builder: &mut Builder, node: Node<'a>, style: Style) {
+        let source = match (&self.track, &builder.track) {
+            (Some(_), Some(tracker)) => tracker.range(&node.data().sourcepos),
+            _ => return self.build_node(builder, node, style),
+        };
+        let (leaf, group, mark, text) = match &node.data().value {
+            NodeValue::Text(_) => (true, false, false, true),
+            NodeValue::Code(_)
+            | NodeValue::Math(_)
+            | NodeValue::HtmlInline(_)
+            | NodeValue::FootnoteReference(_)
+            | NodeValue::EscapedTag(_)
+            | NodeValue::Raw(_) => (true, false, false, false),
+            NodeValue::Highlight => (false, true, true, false),
+            NodeValue::Emph
+            | NodeValue::Strong
+            | NodeValue::Strikethrough
+            | NodeValue::Insert
+            | NodeValue::Underline
+            | NodeValue::Superscript
+            | NodeValue::Subscript
+            | NodeValue::Link(_)
+            | NodeValue::WikiLink(_) => (false, true, false, false),
+            _ => (false, false, false, false),
+        };
+        if mark && let Some(tracker) = &mut builder.track {
+            tracker.highlights += 1;
+        }
+        if group && let Some(track) = &mut self.track {
+            track.open(source.clone(), mark);
+        }
+        let (text_before, parts_before) = (self.cur.text.len(), self.parts.len());
+        self.build_node(builder, node, style);
+        let Some(track) = &mut self.track else { return };
+        if group {
+            track.close();
+        }
+        // Text added to the same `Rich` (an image in HTML starts another).
+        if leaf && self.parts.len() == parts_before && self.cur.text.len() > text_before {
+            let added = text_before..self.cur.text.len();
+            let exact = text
+                && builder
+                    .track
+                    .as_ref()
+                    .is_some_and(|t| t.is_as_written(&self.cur.text[added.clone()], &source));
+            track.piece(added, source, exact);
+        }
+    }
+
+    fn build_node<'a>(&mut self, builder: &mut Builder, node: Node<'a>, style: Style) {
         let data = node.data();
         match &data.value {
             NodeValue::Text(text) => self.push_text(text, style),

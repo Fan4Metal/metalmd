@@ -5,3 +5,4 @@ pub mod emoji;
 pub mod highlight;
 pub mod html;
 pub mod preprocess;
+pub mod source;

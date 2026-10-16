@@ -15,6 +15,7 @@
 use comrak::{Anchorizer, Options};
 use regex::{Captures, Regex};
 use std::borrow::Cow;
+use std::ops::Range;
 use std::sync::LazyLock;
 
 /// `![[target]]` / `![[target|size]]`. Deliberately not `(?s)`: an embed never
@@ -36,6 +37,37 @@ static BLOCK_ID_RE: LazyLock<Regex> =
 pub const EMBED_SIZE_TITLE_PREFIX: &str = "qmd-size:";
 /// Class of the empty anchor a `^block-id` becomes.
 pub const BLOCK_ID_ANCHOR_CLASS: &str = "block-id-anchor";
+
+/// A rewrite made by one pass: the text at `from` in its input became
+/// `len` bytes of its output. A pass's rewrites are in order and apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rewrite {
+    pub from: Range<usize>,
+    pub len: usize,
+}
+
+/// Where `at`, an offset in the output of the pass that made `rewrites`,
+/// was in its input. Inside a rewritten piece it is the start of what that
+/// piece was, or with `end` its end.
+pub fn before_rewrites(rewrites: &[Rewrite], at: usize, end: bool) -> usize {
+    // Output minus input length of the rewrites passed.
+    let mut grown = 0isize;
+    for rewrite in rewrites {
+        let out_start = rewrite.from.start.saturating_add_signed(grown);
+        if at <= out_start {
+            break;
+        }
+        if at < out_start + rewrite.len {
+            return if end {
+                rewrite.from.end
+            } else {
+                rewrite.from.start
+            };
+        }
+        grown += rewrite.len as isize - rewrite.from.len() as isize;
+    }
+    at.saturating_add_signed(-grown)
+}
 
 /// The comrak configuration documents are parsed with.
 ///
@@ -527,18 +559,20 @@ fn math_ranges(content: &str, code: &[(usize, usize)]) -> Vec<(usize, usize)> {
 fn replace_outside_code<'a>(
     content: &'a str,
     re: &Regex,
+    rewrites: &mut Vec<Rewrite>,
     f: impl FnMut(&Captures) -> String,
 ) -> Cow<'a, str> {
-    replace_outside(content, re, code_region_ranges, f)
+    replace_outside(content, re, code_region_ranges, rewrites, f)
 }
 
 /// Replaces the matches of `re` that do not start in one of the ranges
-/// `protected` finds. Those are found at the first match: most documents
-/// have none.
+/// `protected` finds, adding what changed to `rewrites`. Those ranges are
+/// found at the first match: most documents have none.
 fn replace_outside<'a>(
     content: &'a str,
     re: &Regex,
     protected: fn(&str) -> Vec<(usize, usize)>,
+    rewrites: &mut Vec<Rewrite>,
     mut f: impl FnMut(&Captures) -> String,
 ) -> Cow<'a, str> {
     let mut regions = None;
@@ -546,20 +580,31 @@ fn replace_outside<'a>(
         let full = caps.get(0).expect("group 0 always matches");
         let regions = regions.get_or_insert_with(|| protected(content));
         if in_code_region(regions, full.start()) {
-            full.as_str().to_string()
-        } else {
-            f(caps)
+            return full.as_str().to_string();
         }
+        let replaced = f(caps);
+        if replaced != full.as_str() {
+            rewrites.push(Rewrite {
+                from: full.range(),
+                len: replaced.len(),
+            });
+        }
+        replaced
     })
 }
 
 /// `![[path]]`, `![[path|300]]`, `![[path|300x200]]` → a Markdown image whose
 /// title carries the requested size.
+#[cfg(test)]
 pub fn process_internal_embeds(content: &str) -> Cow<'_, str> {
+    internal_embeds(content, &mut Vec::new())
+}
+
+fn internal_embeds<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a, str> {
     if !content.contains("![[") {
         return Cow::Borrowed(content);
     }
-    replace_outside_code(content, &INTERNAL_EMBED_RE, |caps| {
+    replace_outside_code(content, &INTERNAL_EMBED_RE, rewrites, |caps| {
         let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         let mut parts = inner.split('|');
         let path = parts.next().unwrap_or("").trim();
@@ -583,12 +628,23 @@ pub fn process_internal_embeds(content: &str) -> Cow<'_, str> {
 /// Markdown links; ` ^block-id` at a line end becomes an empty anchor.
 /// Bare `[[Note]]` is left literal on purpose: it would swallow `[[1]]`
 /// citations and CommonMark reference links.
+#[cfg(test)]
 pub fn process_wikilinks(content: &str) -> Cow<'_, str> {
+    wikilinks(content, &mut Vec::new(), &mut Vec::new())
+}
+
+/// [`process_wikilinks`], adding the links it makes to `links` and the
+/// anchors (a pass of their own, after the links) to `ids`.
+fn wikilinks<'a>(
+    content: &'a str,
+    links: &mut Vec<Rewrite>,
+    ids: &mut Vec<Rewrite>,
+) -> Cow<'a, str> {
     let mut processed = Cow::Borrowed(content);
 
     if content.contains("[[") && WIKILINK_RE.is_match(&processed) {
         let source: &str = &processed;
-        let replaced = replace_outside_code(source, &WIKILINK_RE, |caps| {
+        let replaced = replace_outside_code(source, &WIKILINK_RE, links, |caps| {
             let full = caps.get(0).expect("group 0 always matches");
             let literal = || full.as_str().to_string();
             // A target spanning lines can never resolve, and rewriting it
@@ -640,11 +696,17 @@ pub fn process_wikilinks(content: &str) -> Cow<'_, str> {
     }
 
     if processed.contains('^') && BLOCK_ID_RE.is_match(&processed) {
-        let replaced = replace_outside(&processed, &BLOCK_ID_RE, code_and_math_ranges, |caps| {
-            let leading = caps.get(1).map(|m| m.as_str()).unwrap_or(" ");
-            let id = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            format!("{leading}<a id=\"{id}\" class=\"{BLOCK_ID_ANCHOR_CLASS}\"></a>")
-        });
+        let replaced = replace_outside(
+            &processed,
+            &BLOCK_ID_RE,
+            code_and_math_ranges,
+            ids,
+            |caps| {
+                let leading = caps.get(1).map(|m| m.as_str()).unwrap_or(" ");
+                let id = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                format!("{leading}<a id=\"{id}\" class=\"{BLOCK_ID_ANCHOR_CLASS}\"></a>")
+            },
+        );
         processed = Cow::Owned(replaced.into_owned());
     }
 
@@ -653,7 +715,12 @@ pub fn process_wikilinks(content: &str) -> Cow<'_, str> {
 
 /// `(https://example.com/path)text` → the URL becomes an explicit link that
 /// stops at the closing parenthesis instead of running into `text`.
+#[cfg(test)]
 pub fn process_parenthesized_autolinks(content: &str) -> Cow<'_, str> {
+    parenthesized_autolinks(content, &mut Vec::new())
+}
+
+fn parenthesized_autolinks<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a, str> {
     if !content.contains("://") {
         return Cow::Borrowed(content);
     }
@@ -718,12 +785,17 @@ pub fn process_parenthesized_autolinks(content: &str) -> Cow<'_, str> {
 
                 let url = &content[url_start..closing];
                 output.push_str(&content[copied_to..url_start]);
+                let written = output.len();
                 output.push('[');
                 output.push_str(url);
                 output.push_str("](");
                 output.push_str(url);
                 output.push(')');
                 output.push(')');
+                rewrites.push(Rewrite {
+                    from: url_start..after_closing,
+                    len: output.len() - written,
+                });
                 copied_to = after_closing;
             }
         }
@@ -744,15 +816,28 @@ pub fn process_parenthesized_autolinks(content: &str) -> Cow<'_, str> {
 
 /// The whole preprocessing pipeline, in Markpad's order.
 pub fn preprocess(content: &str) -> Cow<'_, str> {
-    let autolinks = process_parenthesized_autolinks(content);
-    let embeds = match process_internal_embeds(&autolinks) {
+    preprocess_with_rewrites(content).0
+}
+
+/// [`preprocess`], also giving each pass's rewrites, first pass first.
+pub fn preprocess_with_rewrites(content: &str) -> (Cow<'_, str>, [Vec<Rewrite>; 4]) {
+    let mut passes: [Vec<Rewrite>; 4] = Default::default();
+    let [
+        autolink_rewrites,
+        embed_rewrites,
+        link_rewrites,
+        id_rewrites,
+    ] = &mut passes;
+    let autolinks = parenthesized_autolinks(content, autolink_rewrites);
+    let embeds = match internal_embeds(&autolinks, embed_rewrites) {
         Cow::Borrowed(_) => autolinks,
         Cow::Owned(s) => Cow::Owned(s),
     };
-    match process_wikilinks(&embeds) {
+    let out = match wikilinks(&embeds, link_rewrites, id_rewrites) {
         Cow::Borrowed(_) => embeds,
         Cow::Owned(s) => Cow::Owned(s),
-    }
+    };
+    (out, passes)
 }
 
 #[cfg(test)]

@@ -31,6 +31,46 @@ pub fn set_body_size(size: f32) {
     };
     BODY_SIZE.store(size.to_bits(), Ordering::Relaxed);
 }
+/// Highlight colours the Text panel offers, for the light and the dark
+/// theme, the theme's own first, with their names.
+pub fn mark_presets(dark: bool) -> [(Color32, &'static str); 6] {
+    let rgb = Color32::from_rgb;
+    if dark {
+        [
+            (rgb(0x5c, 0x47, 0x0f), tr!("Yellow", "Жёлтый")),
+            (rgb(0x1f, 0x4a, 0x2a), tr!("Green", "Зелёный")),
+            (rgb(0x1b, 0x3a, 0x5e), tr!("Blue", "Синий")),
+            (rgb(0x5a, 0x24, 0x40), tr!("Pink", "Розовый")),
+            (rgb(0x5e, 0x3a, 0x12), tr!("Orange", "Оранжевый")),
+            (rgb(0x3d, 0x2d, 0x66), tr!("Violet", "Фиолетовый")),
+        ]
+    } else {
+        [
+            (rgb(0xff, 0xf3, 0x9c), tr!("Yellow", "Жёлтый")),
+            (rgb(0xd3, 0xf5, 0xc9), tr!("Green", "Зелёный")),
+            (rgb(0xd4, 0xe9, 0xff), tr!("Blue", "Синий")),
+            (rgb(0xff, 0xd9, 0xe8), tr!("Pink", "Розовый")),
+            (rgb(0xff, 0xe1, 0xbf), tr!("Orange", "Оранжевый")),
+            (rgb(0xe8, 0xdc, 0xff), tr!("Violet", "Фиолетовый")),
+        ]
+    }
+}
+
+/// `#rrggbb` (the `#` may be left out) as a colour.
+pub fn parse_hex(text: &str) -> Option<Color32> {
+    let hex = text.trim().trim_start_matches('#');
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some(Color32::from_rgb(channel(0)?, channel(2)?, channel(4)?))
+}
+
+/// A colour as `#rrggbb`.
+pub fn to_hex(color: Color32) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b())
+}
+
 /// Widest the text column gets, in points, before it is centered.
 pub const MAX_CONTENT_WIDTH: f32 = 880.0;
 
@@ -61,7 +101,7 @@ impl Palette {
                 link: Color32::from_rgb(0x44, 0x93, 0xf8),
                 code_bg: Color32::from_rgb(0x2a, 0x30, 0x38),
                 code_block_bg: Color32::from_rgb(0x15, 0x1b, 0x23),
-                mark_bg: Color32::from_rgb(0x5c, 0x47, 0x0f),
+                mark_bg: mark_presets(true)[0].0,
                 border: Color32::from_rgb(0x3d, 0x44, 0x4d),
                 quote_bar: Color32::from_rgb(0x3d, 0x44, 0x4d),
                 search_bg: Color32::from_rgb(0x6b, 0x4e, 0x0c),
@@ -76,7 +116,7 @@ impl Palette {
                 link: Color32::from_rgb(0x09, 0x69, 0xda),
                 code_bg: Color32::from_rgb(0xec, 0xee, 0xf1),
                 code_block_bg: Color32::from_rgb(0xf6, 0xf8, 0xfa),
-                mark_bg: Color32::from_rgb(0xff, 0xf3, 0x9c),
+                mark_bg: mark_presets(false)[0].0,
                 border: Color32::from_rgb(0xd1, 0xd9, 0xe0),
                 quote_bar: Color32::from_rgb(0xd1, 0xd9, 0xe0),
                 search_bg: Color32::from_rgb(0xff, 0xe0, 0x82),

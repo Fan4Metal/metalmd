@@ -1,11 +1,13 @@
 //! The application: windows, tabs, background loading, input and panels.
 
 use crate::bench::Bench;
+use crate::edit::{Change, Written};
 use crate::fonts::{Family, FontSpec};
 use crate::fs_text;
-use crate::markdown::document::{Block, Document, Scripts, Task};
+use crate::markdown::document::{Block, Document, Scripts};
 use crate::markdown::highlight::Highlighter;
 use crate::markdown::preprocess::{heading_anchor_id, is_markdown_path, percent_decode};
+use crate::markdown::source::Selected;
 use crate::settings::{Settings, ThemeSetting, TocSide, same_path};
 use crate::single_instance::Server;
 use crate::style::{self, FontChoice, Palette, body_size};
@@ -43,14 +45,65 @@ pub fn request_repaint(cell: &CtxCell) {
     }
 }
 
-/// A task list item to tick, from tab `tab`. Ticks are written one at a
-/// time in order, so an undo finds the file its tick left.
-pub struct TaskJob {
+/// A change to the document of tab `tab`. Changes are written one at a
+/// time in order, so an undo finds the file its change left.
+pub struct EditJob {
     tab: u64,
     path: PathBuf,
-    task: Task,
+    change: Change,
     /// Set for an undo: the digest the file must still have.
     expect: Option<u64>,
+}
+
+/// Work on a document's file, done in order on one thread.
+enum FileJob {
+    Edit(EditJob),
+    /// Find a selection's Markdown, to copy it.
+    Markdown {
+        tab: u64,
+        path: PathBuf,
+        selection: Vec<Selected>,
+    },
+}
+
+/// What could not be done to a tab's file, until the next load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Failed {
+    Tick,
+    Highlight,
+    Copy,
+}
+
+impl Failed {
+    fn of(change: &Change) -> Failed {
+        match change {
+            Change::Tick(_) => Failed::Tick,
+            Change::Highlight(_) | Change::Unhighlight(_) | Change::Restore(_) => Failed::Highlight,
+        }
+    }
+
+    /// The word in the status line.
+    fn status(self) -> &'static str {
+        match self {
+            Failed::Tick | Failed::Highlight => tr!("not saved", "не сохранено"),
+            Failed::Copy => tr!("not copied", "не скопировано"),
+        }
+    }
+
+    /// What it says on hover, before the reason.
+    fn what(self) -> &'static str {
+        match self {
+            Failed::Tick => tr!(
+                "The task list item was not ticked:",
+                "Пункт списка задач не отмечен:"
+            ),
+            Failed::Highlight => tr!(
+                "The highlight was not saved:",
+                "Выделение цветом не сохранено:"
+            ),
+            Failed::Copy => tr!("The Markdown was not copied:", "Markdown не скопирован:"),
+        }
+    }
 }
 
 /// A document read and parsed off the UI thread.
@@ -68,10 +121,15 @@ pub enum AppMsg {
     },
     OpenPaths(Vec<PathBuf>),
     FileChanged(PathBuf),
-    /// A task list item was ticked in this file, or could not be.
-    TaskWritten {
-        job: TaskJob,
-        result: Result<Option<u64>, String>,
+    /// A change was written to this file, or could not be.
+    Written {
+        job: EditJob,
+        result: Result<Option<Written>, String>,
+    },
+    /// The Markdown of a selection in this tab, to copy.
+    Markdown {
+        tab: u64,
+        result: Result<String, String>,
     },
     Fonts(Vec<(String, FontData)>),
     /// The system's font families, for the Text panel.
@@ -106,6 +164,12 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
         encoding: decoded.encoding,
         lossy: decoded.lossy,
     })
+}
+
+/// The Markdown of `selection` in the file at `path`, read again.
+fn copy_markdown(path: &Path, selection: &[Selected]) -> Result<String, String> {
+    let decoded = fs_text::read_to_string_lossy(path).map_err(|e| e.to_string())?;
+    crate::markdown::source::markdown(&decoded.content, selection).map_err(|p| p.message())
 }
 
 /// Windows narrower than this, in points, show no table of contents.
@@ -165,11 +229,11 @@ struct Tab {
     encoding: String,
     lossy: bool,
     deleted: bool,
-    /// Why ticking a task list item failed, until the next load.
-    write_error: Option<String>,
-    /// Ticks made here, last last: each as the tick that undoes it and the
-    /// digest of the file it left.
-    undo: Vec<(Task, u64)>,
+    /// What could not be done to the file and why, until the next load.
+    failed: Option<(Failed, String)>,
+    /// Changes made here, last last: each as the change that undoes it and
+    /// the digest of the file it left.
+    undo: Vec<(Change, u64)>,
     view: ViewState,
     /// Anchor to scroll to once the document has loaded.
     pending_anchor: Option<String>,
@@ -196,7 +260,7 @@ impl Tab {
             encoding: String::new(),
             lossy: false,
             deleted: false,
-            write_error: None,
+            failed: None,
             undo: Vec::new(),
             view: ViewState::default(),
             pending_anchor: None,
@@ -389,8 +453,9 @@ pub struct App {
     window_moved: Option<Instant>,
     /// Ctrl+wheel notches not yet turned into zoom steps.
     wheel_zoom: f32,
-    /// The thread that writes ticks, started by the first one.
-    task_writer: Option<Sender<TaskJob>>,
+    /// The thread that changes documents and finds the Markdown of
+    /// selections, started by the first job.
+    file_worker: Option<Sender<FileJob>>,
     /// Another launch handed over files: bring the window they open in to
     /// the front. Set by the single-instance thread and taken in `logic`,
     /// which runs while the window is minimized too.
@@ -438,6 +503,7 @@ impl App {
         // Last: it stands in front of the loaders above.
         crate::ui::limit::LimitLoader::install(&ctx);
         ctx.add_plugin(crate::ui::copy::CopyPlugin);
+        ctx.add_plugin(crate::ui::selection::TextSelection::default());
         if let Some(b) = bench.as_mut() {
             b.mark("fonts_ready");
         }
@@ -522,7 +588,7 @@ impl App {
             refresh_caption: false,
             window_moved: None,
             wheel_zoom: 0.0,
-            task_writer: None,
+            file_worker: None,
             raise,
             updates,
         }
@@ -803,7 +869,7 @@ impl App {
                         tab.lossy = loaded.lossy;
                         tab.error = None;
                         tab.deleted = false;
-                        tab.write_error = None;
+                        tab.failed = None;
                         let path = tab.path.clone();
                         self.windows[w].find.invalidate();
                         self.settings.add_recent(&path);
@@ -846,27 +912,31 @@ impl App {
             }
             AppMsg::FileChanged(path) => self.reload_path(&path),
             // Reloaded at once rather than when the watcher notices.
-            AppMsg::TaskWritten { job, result } => {
+            AppMsg::Written { job, result } => {
                 let undo = job.expect.is_some();
                 match result {
                     Ok(written) => {
-                        if let (Some(digest), false, Some((w, t))) =
+                        if let (Some(written), false, Some((w, t))) =
                             (written, undo, self.find_tab(job.tab))
                         {
-                            let task = Task {
-                                checked: !job.task.checked,
-                                ..job.task
-                            };
-                            self.windows[w].tabs[t].undo.push((task, digest));
+                            let tab = &mut self.windows[w].tabs[t];
+                            tab.undo.push((written.undo, written.digest));
+                            // What was selected is not there any more.
+                            if !matches!(job.change, Change::Tick(_)) {
+                                ctx.plugin::<crate::ui::selection::TextSelection>()
+                                    .lock()
+                                    .clear();
+                            }
                         }
                         self.reload_path(&job.path);
                     }
                     Err(error) => {
+                        let failed = Failed::of(&job.change);
                         for window in &mut self.windows {
                             for tab in &mut window.tabs {
                                 if same_path(&tab.path, &job.path) {
-                                    tab.write_error = Some(error.clone());
-                                    // The file is not the one the ticks
+                                    tab.failed = Some((failed, error.clone()));
+                                    // The file is not the one the changes
                                     // were made in any more.
                                     tab.undo.clear();
                                 }
@@ -875,6 +945,14 @@ impl App {
                     }
                 }
             }
+            AppMsg::Markdown { tab, result } => match result {
+                Ok(text) => ctx.copy_text(text),
+                Err(error) => {
+                    if let Some((w, t)) = self.find_tab(tab) {
+                        self.windows[w].tabs[t].failed = Some((Failed::Copy, error));
+                    }
+                }
+            },
             AppMsg::Fonts(extra) => {
                 if !extra.is_empty() {
                     let extra: Vec<(String, Arc<FontData>)> = extra
@@ -997,14 +1075,40 @@ impl App {
         let target = match action {
             ViewAction::OpenLink(target) => target,
             ViewAction::ToggleTask(task) => {
-                if let Some(tab) = self.win().active_tab() {
-                    let job = TaskJob {
+                self.edit(Change::Tick(task));
+                return;
+            }
+            ViewAction::CopyMarkdown => {
+                if let Some(tab) = self.win().active_tab()
+                    && !tab.view.selection().is_empty()
+                {
+                    let job = FileJob::Markdown {
                         tab: tab.id,
                         path: tab.path.clone(),
-                        task,
-                        expect: None,
+                        selection: tab.view.selection().to_vec(),
                     };
-                    self.write_task(job);
+                    self.send_file_job(job);
+                }
+                return;
+            }
+            ViewAction::Highlight => {
+                if let Some(tab) = self.win().active_tab()
+                    && !tab.view.selection().is_empty()
+                {
+                    let selection = tab.view.selection().to_vec();
+                    self.edit(Change::Highlight(selection));
+                }
+                return;
+            }
+            ViewAction::Unhighlight => {
+                if let Some(tab) = self.win().active_tab() {
+                    let selection = match tab.view.selection() {
+                        [] => tab.view.menu_point().map(|p| vec![p.at.clone()]),
+                        selection => Some(selection.to_vec()),
+                    };
+                    if let Some(selection) = selection {
+                        self.edit(Change::Unhighlight(selection));
+                    }
                 }
                 return;
             }
@@ -1056,40 +1160,71 @@ impl App {
         });
     }
 
-    /// Ticks or clears a task list item in the file, off the UI thread: the
-    /// file may be on a slow disk or another computer.
-    fn write_task(&mut self, job: TaskJob) {
-        let writer = self.task_writer.get_or_insert_with(|| {
-            let (jobs, queue) = std::sync::mpsc::channel::<TaskJob>();
-            let sender = self.sender.clone();
-            let cell = self.ctx_cell.clone();
-            std::thread::spawn(move || {
-                for job in queue {
-                    let result = crate::tasks::toggle(&job.path, job.task, job.expect);
-                    let _ = sender.send(AppMsg::TaskWritten { job, result });
-                    request_repaint(&cell);
-                }
-            });
-            jobs
-        });
-        let _ = writer.send(job);
+    /// Makes `change` in the active tab's file.
+    fn edit(&mut self, change: Change) {
+        if let Some(tab) = self.win().active_tab() {
+            let job = EditJob {
+                tab: tab.id,
+                path: tab.path.clone(),
+                change,
+                expect: None,
+            };
+            self.send_file_job(FileJob::Edit(job));
+        }
     }
 
-    /// Undoes the last tick made in the active tab (Ctrl+Z).
-    fn undo_task(&mut self) {
+    /// Changes a document's file or reads it, off the UI thread: the file
+    /// may be on a slow disk or another computer.
+    fn send_file_job(&mut self, job: FileJob) {
+        let worker = self.file_worker.get_or_insert_with(|| {
+            let (jobs, queue) = std::sync::mpsc::channel::<FileJob>();
+            let sender = self.sender.clone();
+            let cell = self.ctx_cell.clone();
+            std::thread::Builder::new()
+                .name("file".into())
+                // The parse that finds places recurses once per level.
+                .stack_size(16 * 1024 * 1024)
+                .spawn(move || {
+                    for job in queue {
+                        let message = match job {
+                            FileJob::Edit(job) => {
+                                let result = crate::edit::apply(&job.path, &job.change, job.expect);
+                                AppMsg::Written { job, result }
+                            }
+                            FileJob::Markdown {
+                                tab,
+                                path,
+                                selection,
+                            } => AppMsg::Markdown {
+                                tab,
+                                result: copy_markdown(&path, &selection),
+                            },
+                        };
+                        let _ = sender.send(message);
+                        request_repaint(&cell);
+                    }
+                })
+                .expect("spawn file thread");
+            jobs
+        });
+        let _ = worker.send(job);
+    }
+
+    /// Undoes the last change made in the active tab (Ctrl+Z).
+    fn undo_edit(&mut self) {
         let Some(tab) = self.win().active_tab_mut() else {
             return;
         };
-        let Some((task, digest)) = tab.undo.pop() else {
+        let Some((change, digest)) = tab.undo.pop() else {
             return;
         };
-        let job = TaskJob {
+        let job = EditJob {
             tab: tab.id,
             path: tab.path.clone(),
-            task,
+            change,
             expect: Some(digest),
         };
-        self.write_task(job);
+        self.send_file_job(FileJob::Edit(job));
     }
 
     /// Opens a link's target, or asks first if it may run something or
@@ -1239,10 +1374,21 @@ impl App {
                 self.settings_dirty = true;
                 self.fonts_generation += 1;
             }
+            TextChange::MarkColor { dark, color } => {
+                let chosen = if dark {
+                    &mut self.settings.mark_color_dark
+                } else {
+                    &mut self.settings.mark_color
+                };
+                *chosen = color.map(style::to_hex);
+                self.settings_dirty = true;
+            }
             TextChange::Reset => {
                 self.font_request += 1;
                 self.settings.font = None;
                 self.settings.mono_font = None;
+                self.settings.mark_color = None;
+                self.settings.mark_color_dark = None;
                 style::set_body_size(style::DEFAULT_BODY_SIZE);
                 self.settings.text_size = style::DEFAULT_BODY_SIZE;
                 self.settings_dirty = true;
@@ -1349,7 +1495,15 @@ impl App {
             return;
         }
         if consume(command(Key::Z)) {
-            self.undo_task();
+            self.undo_edit();
+        }
+        if consume(command_shift(Key::C)) {
+            // Not copied as text too, which egui would do for Ctrl+C.
+            ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Copy)));
+            self.handle_action(ctx, ViewAction::CopyMarkdown);
+        }
+        if consume(command(Key::H)) {
+            self.handle_action(ctx, ViewAction::Highlight);
         }
         let Some(tab) = self.win().active_tab_mut() else {
             return;
@@ -1555,8 +1709,8 @@ impl App {
                             if tab.deleted {
                                 status.push(tr!("file deleted", "файл удалён").to_owned());
                             }
-                            if tab.write_error.is_some() {
-                                status.push(tr!("not saved", "не сохранено").to_owned());
+                            if let Some((failed, _)) = tab.failed {
+                                status.push(failed.status().to_owned());
                             }
                             if tab.lossy {
                                 status.push(
@@ -1572,15 +1726,8 @@ impl App {
                                         .size(12.0)
                                         .color(palette.muted),
                                 );
-                                if let Some(error) = &tab.write_error {
-                                    label.on_hover_text(format!(
-                                        "{}
-{error}",
-                                        tr!(
-                                            "The task list item was not ticked:",
-                                            "Пункт списка задач не отмечен:"
-                                        )
-                                    ));
+                                if let Some((failed, error)) = &tab.failed {
+                                    label.on_hover_text(format!("{}\n{error}", failed.what()));
                                 }
                             }
                         }
@@ -2028,7 +2175,11 @@ impl App {
         self.track_drag(&ctx);
         self.handle_shortcuts(&ctx);
 
-        let palette = Palette::new(ctx.theme() == Theme::Dark);
+        let dark = ctx.theme() == Theme::Dark;
+        let mut palette = Palette::new(dark);
+        if let Some(color) = self.settings.mark_color(dark) {
+            palette.mark_bg = color;
+        }
         self.tab_bar(ui, &palette);
         self.find_bar(ui, &palette);
         self.jump_to_find_match();

@@ -1,30 +1,45 @@
-//! Ticking a task list item (`- [ ]` ↔ `- [x]`): the one change the viewer
-//! makes to a document. The file is read again, the mark is checked to be
-//! where the parse put it, and only that character is changed; the file is
+//! The changes the viewer makes to a document: ticking a task list item
+//! (`- [ ]` ↔ `- [x]`) and highlighting text (`==text==`, see
+//! `markdown::source`). The file is read again, what was shown is checked
+//! to be where the parse put it, and only that is changed; the file is
 //! written back in the encoding it was read in, or not at all.
 //!
-//! A tick is undone by ticking again, but only in the file as it was
-//! written: changed by someone else since, its lines may have moved, and
-//! the same place may hold another item's box.
+//! A change is undone only in the file as it was written: changed by
+//! someone else since, its lines may have moved, and the same place may
+//! hold another item's box.
 
 use crate::fs_text::{self, UTF8_BOM_LABEL, UTF8_LABEL};
 use crate::markdown::document::Task;
+use crate::markdown::source::{self, Selected};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
+use std::sync::Arc;
 
-/// Ticks or clears `task` in the file at `path`, and gives the digest of
-/// what it wrote (`None` if the task already was as wanted: a second click
-/// before the reload). With `expect`, the file must still be the one of
-/// that digest.
-pub fn toggle(path: &Path, task: Task, expect: Option<u64>) -> Result<Option<u64>, String> {
+#[derive(Clone, Debug)]
+pub enum Change {
+    /// Tick or clear a task list item.
+    Tick(Task),
+    Highlight(Vec<Selected>),
+    /// Remove the highlights a selection touches (or the one around an
+    /// empty one).
+    Unhighlight(Vec<Selected>),
+    /// Put this text back: undoes a highlight.
+    Restore(Arc<str>),
+}
+
+/// A change written: the digest of the file it left, and the change that
+/// undoes it.
+pub struct Written {
+    pub digest: u64,
+    pub undo: Change,
+}
+
+/// Makes `change` in the file at `path`; `None` if there was nothing to
+/// change (a second click before the reload). With `expect`, the file must
+/// still be the one of that digest.
+pub fn apply(path: &Path, change: &Change, expect: Option<u64>) -> Result<Option<Written>, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let unchanged = || {
-        tr!(
-            "The file has changed since it was shown.",
-            "Файл изменился после того, как был показан."
-        )
-        .to_owned()
-    };
+    let unchanged = || source::Problem::Changed.message();
     if expect.is_some_and(|digest| digest != digest_of(&bytes)) {
         return Err(unchanged());
     }
@@ -36,15 +51,46 @@ pub fn toggle(path: &Path, task: Task, expect: Option<u64>) -> Result<Option<u64
         )
         .to_owned());
     }
-    let Some(text) = toggled(&decoded.content, task) else {
-        return Err(unchanged());
+    let text = &decoded.content;
+    let (changed, undo) = match change {
+        Change::Tick(task) => {
+            let Some(changed) = toggled(text, *task) else {
+                return Err(unchanged());
+            };
+            let undo = Change::Tick(Task {
+                checked: !task.checked,
+                ..*task
+            });
+            (Some(changed), undo)
+        }
+        Change::Highlight(selection) => (
+            source::highlight(text, selection).map_err(|p| p.message())?,
+            Change::Restore(text.as_str().into()),
+        ),
+        Change::Unhighlight(selection) => (
+            source::unhighlight(text, selection).map_err(|p| p.message())?,
+            Change::Restore(text.as_str().into()),
+        ),
+        Change::Restore(before) => (
+            Some(before.to_string()),
+            Change::Restore(text.as_str().into()),
+        ),
     };
-    if text == decoded.content {
+    let Some(changed) = changed.filter(|changed| changed != text) else {
         return Ok(None);
-    }
-    let out = encode(&text, &decoded.encoding).ok_or_else(unchanged)?;
+    };
+    let out = encode(&changed, &decoded.encoding).ok_or_else(|| {
+        tr!(
+            "The change has characters the file's encoding does not have.",
+            "В изменении есть символы, которых нет в кодировке файла."
+        )
+        .to_owned()
+    })?;
     std::fs::write(path, &out).map_err(|e| e.to_string())?;
-    Ok(Some(digest_of(&out)))
+    Ok(Some(Written {
+        digest: digest_of(&out),
+        undo,
+    }))
 }
 
 fn digest_of(bytes: &[u8]) -> u64 {
@@ -122,6 +168,10 @@ fn encode(text: &str, label: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::markdown::document::{Block, Document};
+
+    fn toggle(path: &Path, task: Task, expect: Option<u64>) -> Result<Option<u64>, String> {
+        apply(path, &Change::Tick(task), expect).map(|w| w.map(|w| w.digest))
+    }
 
     fn tasks(source: &str) -> Vec<Task> {
         fn walk(blocks: &[Block], out: &mut Vec<Task>) {
@@ -256,6 +306,38 @@ mod tests {
         )
         .unwrap();
         assert!(toggle(&path, back(one), Some(after)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_highlight_is_written_and_undone() {
+        let dir = std::env::temp_dir().join(format!("metalmd-mark-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mark.md");
+        let text = "Ещё **важный** текст\r\n";
+        let bytes = encode(text, "windows-1251").unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let doc = Document::parse(text);
+        let Some(Block::Paragraph { inlines, .. }) = doc.blocks.first() else {
+            panic!()
+        };
+        let crate::markdown::document::Inline::Text(rich) = &inlines[0] else {
+            panic!()
+        };
+        let start = rich.text.find("важный").unwrap();
+        let selection = vec![Selected {
+            part: source::Part::Text(rich.id),
+            range: start..rich.text.len(),
+            digest: source::digest(&rich.text),
+        }];
+        let written = apply(&path, &Change::Highlight(selection), None)
+            .unwrap()
+            .unwrap();
+        let after = fs_text::decode_text(&std::fs::read(&path).unwrap());
+        assert_eq!(after.content, "Ещё ==**важный** текст==\r\n");
+        assert_eq!(after.encoding, "windows-1251");
+        apply(&path, &written.undo, Some(written.digest)).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

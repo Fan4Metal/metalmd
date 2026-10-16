@@ -11,6 +11,7 @@ pub mod home;
 pub mod limit;
 pub mod math;
 pub mod render_cache;
+pub mod selection;
 pub mod svg;
 pub mod text;
 pub mod toc;

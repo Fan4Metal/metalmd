@@ -76,6 +76,11 @@ pub struct Settings {
     pub mono_font: Option<FontSpec>,
     /// Body text size in points.
     pub text_size: f32,
+    /// The background of highlighted text (`==…==`) in the light theme, as
+    /// `#rrggbb`, chosen in the Text panel; `None` for the theme's own.
+    pub mark_color: Option<String>,
+    /// The same in the dark theme.
+    pub mark_color_dark: Option<String>,
     /// Check for a newer release at start-up, at most once a day; off
     /// until turned on in About.
     pub check_updates: bool,
@@ -96,9 +101,24 @@ impl Default for Settings {
             font: None,
             mono_font: None,
             text_size: crate::style::DEFAULT_BODY_SIZE,
+            mark_color: None,
+            mark_color_dark: None,
             check_updates: false,
             last_update_check: 0,
         }
+    }
+}
+
+impl Settings {
+    /// The highlight colour chosen for the dark or the light theme, `None`
+    /// for the theme's own (or one that is not `#rrggbb`).
+    pub fn mark_color(&self, dark: bool) -> Option<egui::Color32> {
+        let chosen = if dark {
+            &self.mark_color_dark
+        } else {
+            &self.mark_color
+        };
+        chosen.as_deref().and_then(crate::style::parse_hex)
     }
 }
 
@@ -231,6 +251,24 @@ pub fn same_path(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn highlight_colours_are_kept_per_theme_as_hex() {
+        let red = egui::Color32::from_rgb(0xff, 0x10, 0x0a);
+        let settings = Settings {
+            mark_color: Some(crate::style::to_hex(red)),
+            mark_color_dark: Some("not a colour".to_owned()),
+            ..Settings::default()
+        };
+        assert_eq!(settings.mark_color.as_deref(), Some("#ff100a"));
+        assert_eq!(settings.mark_color(false), Some(red));
+        assert_eq!(settings.mark_color(true), None);
+        assert_eq!(
+            crate::style::parse_hex("D4E9FF"),
+            Some(egui::Color32::from_rgb(0xd4, 0xe9, 0xff))
+        );
+        assert_eq!(crate::style::parse_hex("#ффф"), None);
+    }
 
     #[test]
     fn recent_files_are_deduplicated_and_capped() {
