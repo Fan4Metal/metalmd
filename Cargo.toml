@@ -1,6 +1,6 @@
 [package]
 name = "metalmd"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Fan4_Metal"]
 edition = "2024"
 description = "Fast Markdown viewer for Windows"
