@@ -199,6 +199,42 @@ fn copy_markdown(path: &Path, selection: &[Selected]) -> Result<String, String> 
 /// Windows narrower than this, in points, show no table of contents.
 const TOC_MIN_WINDOW: f32 = 560.0;
 
+/// The Editor submenu of a tab: the editors found, the one in use
+/// checked (with the program chosen by hand among them), and Other
+/// Program… to choose one.
+fn editor_menu(ui: &mut Ui, settings: &Settings) -> Option<TabMenu> {
+    let current = crate::editor::editor(settings.editor.as_deref());
+    let mut list = crate::editor::installed().to_vec();
+    if !list.iter().any(|e| same_path(&e.exe, &current)) {
+        list.insert(
+            0,
+            crate::editor::Editor {
+                name: crate::editor::name(&current),
+                exe: current.clone(),
+            },
+        );
+    }
+    let mut action = None;
+    for editor in list {
+        let chosen = same_path(&editor.exe, &current);
+        if ui
+            .radio(chosen, &editor.name)
+            .on_hover_text(editor.exe.display().to_string())
+            .clicked()
+        {
+            action = Some(TabMenu::SetEditor(editor.exe));
+        }
+    }
+    ui.separator();
+    if ui
+        .button(tr!("Other program…", "Другая программа…"))
+        .clicked()
+    {
+        action = Some(TabMenu::ChooseEditor);
+    }
+    action
+}
+
 /// Closed tabs Ctrl+Shift+T can open again.
 const MAX_CLOSED_TABS: usize = 25;
 
@@ -456,7 +492,10 @@ struct TabDrag {
 /// What a tab's context menu asked for.
 enum TabMenu {
     Edit(usize),
-    ChooseEditor(usize),
+    /// Use this editor from now on.
+    SetEditor(PathBuf),
+    /// Ask for the editor's program.
+    ChooseEditor,
     Detach(usize),
     ToRoot(usize),
     CloseOthers(usize),
@@ -541,6 +580,8 @@ pub struct App {
     closed_tabs: Vec<PathBuf>,
     /// Printing under way, or how the last one went.
     print_status: Option<PrintStatus>,
+    /// The right button's press held back until its release.
+    right_click: crate::ui::menu::RightClick,
 }
 
 impl App {
@@ -678,6 +719,7 @@ impl App {
             deferred: startup.deferred,
             closed_tabs: Vec::new(),
             print_status: None,
+            right_click: Default::default(),
         }
     }
 
@@ -1527,8 +1569,8 @@ impl App {
         }
     }
 
-    /// Asks for the editor's program; `true` if one was chosen.
-    fn choose_editor(&mut self) -> bool {
+    /// Asks for the editor's program.
+    fn choose_editor(&mut self) {
         let current = crate::editor::editor(self.settings.editor.as_deref());
         let mut dialog = rfd::FileDialog::new()
             .set_title(tr!("Choose the editor", "Выбор редактора"))
@@ -1536,13 +1578,9 @@ impl App {
         if let Some(dir) = current.parent() {
             dialog = dialog.set_directory(dir);
         }
-        match dialog.pick_file() {
-            Some(exe) => {
-                self.settings.editor = Some(exe);
-                self.settings_dirty = true;
-                true
-            }
-            None => false,
+        if let Some(exe) = dialog.pick_file() {
+            self.settings.editor = Some(exe);
+            self.settings_dirty = true;
         }
     }
 
@@ -1958,7 +1996,7 @@ impl App {
                                 .map_or(Vec2::ZERO, |p| p - response.rect.min);
                             drag_start = Some((tab_id, grab));
                         }
-                        response.context_menu(|ui| {
+                        crate::ui::menu::context_menu(&response, |ui| {
                             let edit =
                                 egui::Button::new(tr!("Open in the editor", "Открыть в редакторе"))
                                     .shortcut_text("Ctrl+E");
@@ -1966,15 +2004,12 @@ impl App {
                                 menu_action = Some(TabMenu::Edit(i));
                                 ui.close();
                             }
-                            let editor = crate::editor::editor(self.settings.editor.as_deref());
-                            if ui
-                                .button(tr!("Choose the editor…", "Выбрать редактор…"))
-                                .on_hover_text(editor.display().to_string())
-                                .clicked()
-                            {
-                                menu_action = Some(TabMenu::ChooseEditor(i));
-                                ui.close();
-                            }
+                            ui.menu_button(tr!("Editor", "Редактор"), |ui| {
+                                if let Some(action) = editor_menu(ui, &self.settings) {
+                                    menu_action = Some(action);
+                                    ui.close();
+                                }
+                            });
                             ui.separator();
                             if tab_count > 1
                                 && ui
@@ -2125,11 +2160,11 @@ impl App {
         }
         match menu_action {
             Some(TabMenu::Edit(i)) => self.open_in_editor(i),
-            Some(TabMenu::ChooseEditor(i)) => {
-                if self.choose_editor() {
-                    self.open_in_editor(i);
-                }
+            Some(TabMenu::SetEditor(exe)) => {
+                self.settings.editor = Some(exe);
+                self.settings_dirty = true;
             }
+            Some(TabMenu::ChooseEditor) => self.choose_editor(),
             Some(TabMenu::Detach(i)) => self.detach_tab(cur, i, None),
             Some(TabMenu::ToRoot(i)) => {
                 self.move_tab_to_window(cur, i, 0);
@@ -2838,6 +2873,10 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.right_click.hook(&mut raw_input.events);
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.raise.swap(false, Ordering::Acquire) {
             self.raise_window(ctx);

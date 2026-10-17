@@ -1814,7 +1814,7 @@ fn text_menu(response: &Response, rc: &mut RenderCtx<'_>, on_mark: bool) {
         let button = egui::Button::new(text).shortcut_text(shortcut);
         ui.add_enabled(enabled, button).clicked()
     };
-    response.context_menu(|ui| {
+    super::menu::context_menu(response, |ui| {
         if item(ui, selected, tr!("Copy", "Копировать"), "Ctrl+C") {
             selection::copy(ui.ctx());
             ui.close();
@@ -1892,7 +1892,7 @@ fn draw_display_math(ui: &mut Ui, id: u32, tex: &str, rc: &mut RenderCtx<'_>, sa
             }
             formula.paint(ui.painter(), rect.left(), baseline, em);
         }
-        response.context_menu(|ui| {
+        super::menu::context_menu(&response, |ui| {
             if ui.button(tr!("Copy TeX", "Копировать TeX")).clicked() {
                 ui.ctx().copy_text(tex.to_owned());
                 ui.close();
@@ -1983,7 +1983,7 @@ fn draw_diagram(ui: &mut Ui, id: u32, source: &str, rc: &mut RenderCtx<'_>, salt
                     source.to_owned(),
                 )));
         }
-        response.context_menu(|ui| {
+        super::menu::context_menu(&response, |ui| {
             if ui
                 .button(tr!(
                     "Copy Mermaid source",

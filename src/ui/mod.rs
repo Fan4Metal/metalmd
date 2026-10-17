@@ -11,6 +11,7 @@ pub mod home;
 pub mod lightbox;
 pub mod limit;
 pub mod math;
+pub mod menu;
 pub mod render_cache;
 pub mod selection;
 pub mod svg;
@@ -133,7 +134,7 @@ pub fn text_button(ui: &mut Ui, open: bool) -> Response {
 /// the window it is on. Returns `true` when the side changed.
 pub fn toc_side_menu(response: &Response, side: &mut TocSide) -> bool {
     let before = *side;
-    response.context_menu(|ui| {
+    menu::context_menu(response, |ui| {
         for (value, label) in [
             (
                 TocSide::Left,
@@ -156,7 +157,7 @@ pub fn toc_side_menu(response: &Response, side: &mut TocSide) -> bool {
 /// dark one is. Returns `true` when it changed.
 pub fn dark_style_menu(response: &Response, style: &mut DarkStyle) -> bool {
     let before = *style;
-    response.context_menu(|ui| {
+    menu::context_menu(response, |ui| {
         for (value, label) in [
             (
                 DarkStyle::Grey,
