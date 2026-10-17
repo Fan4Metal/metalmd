@@ -4,7 +4,10 @@
 
 use crate::fonts::Family;
 use crate::settings::Settings;
-use crate::style::{BODY_SIZES, DEFAULT_BODY_SIZE, DEFAULT_FAMILIES, mark_presets};
+use crate::style::{
+    BODY_SIZES, CONTENT_WIDTHS, DEFAULT_BODY_SIZE, DEFAULT_CONTENT_WIDTH, DEFAULT_FAMILIES,
+    mark_presets,
+};
 use egui::{
     Align2, Color32, ComboBox, Id, PopupCloseBehavior, Response, Sense, Stroke, StrokeKind,
     TextEdit, Ui, vec2,
@@ -19,6 +22,9 @@ pub enum TextChange {
         family: Option<Family>,
     },
     Size(f32),
+    /// The widest text column, in points; the end of `CONTENT_WIDTHS` for
+    /// the whole window.
+    Width(f32),
     /// The highlight colour of the dark or the light theme; `None` for the
     /// theme's own.
     MarkColor {
@@ -85,6 +91,28 @@ impl TextPanel {
                         }
                         ui.end_row();
 
+                        ui.label(tr!("Text width", "Ширина текста"));
+                        let mut width = settings.text_width;
+                        let widest = *CONTENT_WIDTHS.end();
+                        let slider = egui::Slider::new(&mut width, CONTENT_WIDTHS)
+                            .step_by(40.0)
+                            .custom_formatter(move |value, _| {
+                                if value >= widest as f64 {
+                                    tr!("whole window", "во всё окно").to_owned()
+                                } else {
+                                    tr!(format!("{value:.0} pt"), format!("{value:.0} пт"))
+                                }
+                            })
+                            .custom_parser(|text| {
+                                let digits: String =
+                                    text.chars().filter(char::is_ascii_digit).collect();
+                                digits.parse().ok()
+                            });
+                        if ui.add(slider).changed() {
+                            change = Some(TextChange::Width(width));
+                        }
+                        ui.end_row();
+
                         ui.label(tr!("Highlight colour", "Цвет выделения"));
                         let dark = ctx.theme() == egui::Theme::Dark;
                         if let Some(color) = mark_colors(ui, settings, dark) {
@@ -96,6 +124,7 @@ impl TextPanel {
                 let default = settings.font.is_none()
                     && settings.mono_font.is_none()
                     && settings.text_size == DEFAULT_BODY_SIZE
+                    && settings.text_width == DEFAULT_CONTENT_WIDTH
                     && settings.mark_color.is_none()
                     && settings.mark_color_dark.is_none();
                 if ui

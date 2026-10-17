@@ -11,7 +11,7 @@ use crate::markdown::document::{
 use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
 use crate::markdown::source::{self, Part, Selected};
-use crate::style::{FontChoice, MAX_CONTENT_WIDTH, Palette, body_size};
+use crate::style::{FontChoice, Palette, body_size, content_width};
 use crate::ui::diagram::DiagramRenderer;
 use crate::ui::emoji::EmojiRenderer;
 use crate::ui::find::{FindState, Match};
@@ -339,7 +339,8 @@ pub fn show_document(
     let count = doc.blocks.len();
     let total_width = ui.available_width();
     let content_width = (total_width - 2.0 * SIDE_PADDING)
-        .clamp(120.0, MAX_CONTENT_WIDTH)
+        .min(content_width())
+        .max(120.0)
         .floor();
     view.prepare(doc, content_width, rc.fonts_generation);
     rc.hover = view.hover;

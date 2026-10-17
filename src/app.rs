@@ -572,6 +572,7 @@ impl App {
         // Chromium scrolls with the default three lines per notch.
         ctx.options_mut(|o| o.input_options.line_scroll_speed = 100.0);
         style::set_body_size(startup.settings.text_size);
+        style::set_content_width(startup.settings.text_width);
         let (base_fonts, fonts) = style::load_fonts(
             startup.settings.font.as_ref(),
             startup.settings.mono_font.as_ref(),
@@ -1667,6 +1668,11 @@ impl App {
                 self.settings_dirty = true;
                 self.fonts_generation += 1;
             }
+            TextChange::Width(width) => {
+                style::set_content_width(width);
+                self.settings.text_width = width;
+                self.settings_dirty = true;
+            }
             TextChange::MarkColor { dark, color } => {
                 let chosen = if dark {
                     &mut self.settings.mark_color_dark
@@ -1684,6 +1690,8 @@ impl App {
                 self.settings.mark_color_dark = None;
                 style::set_body_size(style::DEFAULT_BODY_SIZE);
                 self.settings.text_size = style::DEFAULT_BODY_SIZE;
+                style::set_content_width(style::DEFAULT_CONTENT_WIDTH);
+                self.settings.text_width = style::DEFAULT_CONTENT_WIDTH;
                 self.settings_dirty = true;
                 self.reload_fonts(ctx);
             }
@@ -1722,6 +1730,10 @@ impl App {
         self.zoom_with_wheel(ctx);
         if consume(plain(Key::F1)) {
             self.toggle_about();
+        }
+        let fullscreen = ctx.input(|i| i.viewport().fullscreen == Some(true));
+        if consume(plain(Key::F11)) {
+            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(!fullscreen));
         }
         // A dialog takes the keyboard (Enter and Esc close it).
         if self.about_here() || self.win().confirm.is_open() {
@@ -1821,6 +1833,11 @@ impl App {
         }
         if consume(command_shift(Key::T)) {
             self.reopen_closed_tab();
+        }
+
+        // Esc leaves full screen too, unless it closed find above.
+        if fullscreen && consume(plain(Key::Escape)) {
+            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
         }
 
         // Reading keys, unless a text field has the keyboard.
@@ -2515,6 +2532,10 @@ impl App {
         let zoom = ctx.zoom_factor();
         let geometry = ctx.input(|i| {
             let viewport = i.viewport();
+            // Full screen is not a size to come back to.
+            if viewport.fullscreen == Some(true) {
+                return None;
+            }
             let outer = viewport.outer_rect?;
             let inner = viewport.inner_rect?;
             Some(crate::settings::WindowGeometry {

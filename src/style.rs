@@ -72,8 +72,32 @@ pub fn to_hex(color: Color32) -> String {
     format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b())
 }
 
-/// Widest the text column gets, in points, before it is centered.
-pub const MAX_CONTENT_WIDTH: f32 = 880.0;
+/// Widest the text column gets, in points, before it is centered, unless
+/// the reader chose another width.
+pub const DEFAULT_CONTENT_WIDTH: f32 = 880.0;
+/// The widths the Text panel offers; the last one means no limit.
+pub const CONTENT_WIDTHS: std::ops::RangeInclusive<f32> = 560.0..=1600.0;
+
+/// The widest text column, as `f32` bits.
+static CONTENT_WIDTH: AtomicU32 = AtomicU32::new(DEFAULT_CONTENT_WIDTH.to_bits());
+
+/// Widest the text column gets, in points; infinite for the whole window.
+pub fn content_width() -> f32 {
+    f32::from_bits(CONTENT_WIDTH.load(Ordering::Relaxed))
+}
+
+/// Sets the widest text column (see [`CONTENT_WIDTHS`]; its end means the
+/// whole window). The viewer measures the blocks again on its own.
+pub fn set_content_width(width: f32) {
+    let width = if width >= *CONTENT_WIDTHS.end() {
+        f32::INFINITY
+    } else if width.is_finite() {
+        width.max(*CONTENT_WIDTHS.start())
+    } else {
+        DEFAULT_CONTENT_WIDTH
+    };
+    CONTENT_WIDTH.store(width.to_bits(), Ordering::Relaxed);
+}
 
 /// Document colors for one theme: GitHub's palette in the light one; in
 /// the dark one the neutral greys of metalmpv or GitHub's, nearly black

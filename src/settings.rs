@@ -102,6 +102,9 @@ pub struct Settings {
     pub mono_font: Option<FontSpec>,
     /// Body text size in points.
     pub text_size: f32,
+    /// Widest the text column gets, in points; the end of
+    /// `style::CONTENT_WIDTHS` for the whole window.
+    pub text_width: f32,
     /// The background of highlighted text (`==…==`) in the light theme, as
     /// `#rrggbb`, chosen in the Text panel; `None` for the theme's own.
     pub mark_color: Option<String>,
@@ -142,6 +145,7 @@ impl Default for Settings {
             font: None,
             mono_font: None,
             text_size: crate::style::DEFAULT_BODY_SIZE,
+            text_width: crate::style::DEFAULT_CONTENT_WIDTH,
             mark_color: None,
             mark_color_dark: None,
             check_updates: false,
@@ -233,6 +237,9 @@ impl Settings {
                 }
                 if !crate::style::BODY_SIZES.contains(&settings.text_size) {
                     settings.text_size = crate::style::DEFAULT_BODY_SIZE;
+                }
+                if !crate::style::CONTENT_WIDTHS.contains(&settings.text_width) {
+                    settings.text_width = crate::style::DEFAULT_CONTENT_WIDTH;
                 }
                 settings
             })
