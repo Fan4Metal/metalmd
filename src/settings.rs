@@ -9,6 +9,9 @@ use std::sync::{Mutex, OnceLock};
 
 pub const MAX_RECENT: usize = 9;
 
+/// Documents whose reading position is kept, the last read first.
+pub const MAX_POSITIONS: usize = 100;
+
 /// The number of the last save asked for, and of the last one written.
 static SAVES: AtomicU64 = AtomicU64::new(0);
 static WRITTEN: Mutex<u64> = Mutex::new(0);
@@ -70,6 +73,16 @@ pub struct WindowGeometry {
     pub maximized: bool,
 }
 
+/// Where a document was left: its first visible top-level block and how
+/// far below the top of the view that block started (negative once
+/// scrolled into it), as `ViewState::reading_position` gives it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReadingPosition {
+    pub path: PathBuf,
+    pub block: usize,
+    pub offset: f32,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -99,6 +112,13 @@ pub struct Settings {
     pub check_updates: bool,
     /// Unix seconds of the last update check that got an answer.
     pub last_update_check: u64,
+    /// The tabs open when the app was last closed, in the order of their
+    /// windows; opened again when it starts without files.
+    pub session: Vec<PathBuf>,
+    /// Which of `session` was shown in the main window.
+    pub session_active: usize,
+    /// Where recently read documents were left, the last read first.
+    pub positions: Vec<ReadingPosition>,
 }
 
 impl Default for Settings {
@@ -119,6 +139,9 @@ impl Default for Settings {
             mark_color_dark: None,
             check_updates: false,
             last_update_check: 0,
+            session: Vec::new(),
+            session_active: 0,
+            positions: Vec::new(),
         }
     }
 }
@@ -250,6 +273,33 @@ impl Settings {
     pub fn remove_recent(&mut self, path: &Path) {
         self.recent.retain(|p| !same_path(p, path));
     }
+
+    /// Where the document at `path` was left, if it was read past its top.
+    pub fn position(&self, path: &Path) -> Option<(usize, f32)> {
+        self.positions
+            .iter()
+            .find(|p| same_path(&p.path, path))
+            .map(|p| (p.block, p.offset))
+    }
+
+    /// Keeps where the document at `path` was left, first in the list; a
+    /// document left at its top is forgotten.
+    pub fn set_position(&mut self, path: &Path, position: (usize, f32)) {
+        self.positions.retain(|p| !same_path(&p.path, path));
+        let (block, offset) = position;
+        if block == 0 && offset >= 0.0 {
+            return;
+        }
+        self.positions.insert(
+            0,
+            ReadingPosition {
+                path: path.to_path_buf(),
+                block,
+                offset: offset.round(),
+            },
+        );
+        self.positions.truncate(MAX_POSITIONS);
+    }
 }
 
 /// Path equality as the file system sees it (case-insensitive on Windows).
@@ -301,6 +351,25 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn reading_positions_are_kept_last_first_and_capped() {
+        let mut settings = Settings::default();
+        for i in 0..MAX_POSITIONS + 5 {
+            settings.set_position(Path::new(&format!("/docs/{i}.md")), (i + 1, -20.4));
+        }
+        assert_eq!(settings.positions.len(), MAX_POSITIONS);
+        settings.set_position(Path::new("/docs/50.md"), (7, 8.0));
+        assert_eq!(settings.positions[0].path, PathBuf::from("/docs/50.md"));
+        assert_eq!(settings.position(Path::new("/docs/50.md")), Some((7, 8.0)));
+        assert_eq!(
+            settings.position(Path::new(&format!("/docs/{}.md", MAX_POSITIONS + 4))),
+            Some((MAX_POSITIONS + 5, -20.0))
+        );
+        // Back at the top: nothing to keep.
+        settings.set_position(Path::new("/docs/50.md"), (0, 8.0));
+        assert_eq!(settings.position(Path::new("/docs/50.md")), None);
     }
 
     #[test]

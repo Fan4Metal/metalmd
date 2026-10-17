@@ -90,17 +90,34 @@ fn main() -> eframe::Result {
         None
     };
 
-    // Start reading and parsing now, in parallel with window creation.
+    let settings = Settings::load();
+    // Started without files: the tabs of the last run, the one shown last
+    // in front.
+    let restored = paths.is_empty() && bench.is_none() && !settings.session.is_empty();
+    let active = if restored {
+        paths = settings.session.clone();
+        settings.session_active.min(paths.len() - 1)
+    } else {
+        paths.len().saturating_sub(1)
+    };
+
+    // Start reading and parsing now, in parallel with window creation. Of
+    // a restored session only the tab shown: the others wait for the
+    // second frame, so they do not slow it down.
     let (sender, receiver) = std::sync::mpsc::channel::<AppMsg>();
     let ctx_cell: app::CtxCell = Arc::new(OnceLock::new());
     let mut tabs = Vec::new();
+    let mut deferred = Vec::new();
     for (i, path) in paths.into_iter().enumerate() {
         let id = i as u64 + 1;
-        app::spawn_load(sender.clone(), ctx_cell.clone(), id, 0, path.clone());
+        if restored && i != active {
+            deferred.push((id, path.clone()));
+        } else {
+            app::spawn_load(sender.clone(), ctx_cell.clone(), id, 0, path.clone());
+        }
         tabs.push((id, path));
     }
 
-    let settings = Settings::load();
     i18n::set_lang(settings.language.resolve());
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("MetalMD")
@@ -145,6 +162,9 @@ fn main() -> eframe::Result {
     }
     let startup = Startup {
         tabs,
+        active,
+        deferred,
+        restored,
         sender,
         receiver,
         ctx_cell,

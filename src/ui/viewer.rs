@@ -142,6 +142,12 @@ impl ViewState {
         Some((self.first_visible, top - self.viewport_top))
     }
 
+    /// Where to come back to: the jump not made yet (a tab never shown since
+    /// its document loaded), else the reading position.
+    pub fn saved_position(&self) -> Option<(usize, f32)> {
+        self.jump.or_else(|| self.reading_position())
+    }
+
     pub fn jump_to(&mut self, block: usize, offset: f32) {
         self.jump = Some((block, offset));
     }

@@ -259,6 +259,9 @@ struct Tab {
     restore: Option<(usize, f32)>,
     /// Positions to return to with Alt+Left.
     back: Vec<(usize, f32)>,
+    /// Reopened from the last run's session: if its file is gone, the tab
+    /// closes instead of showing the error.
+    restored: bool,
 }
 
 impl Tab {
@@ -284,6 +287,7 @@ impl Tab {
             pending_anchor: None,
             restore: None,
             back: Vec::new(),
+            restored: false,
         }
     }
 }
@@ -415,8 +419,15 @@ enum TabMenu {
 
 /// What `main` prepared before the window existed.
 pub struct Startup {
-    /// Tabs whose loading has already started, with their ids.
+    /// The tabs with their ids; the loading of those not in `deferred` has
+    /// already started.
     pub tabs: Vec<(u64, PathBuf)>,
+    /// The tab shown.
+    pub active: usize,
+    /// Tabs to load from the second frame on.
+    pub deferred: Vec<(u64, PathBuf)>,
+    /// The tabs are the last run's session.
+    pub restored: bool,
     pub sender: Sender<AppMsg>,
     pub receiver: Receiver<AppMsg>,
     pub ctx_cell: CtxCell,
@@ -479,6 +490,8 @@ pub struct App {
     /// which runs while the window is minimized too.
     raise: Arc<AtomicBool>,
     updates: Updates,
+    /// Restored tabs whose loading waits for the second frame.
+    deferred: Vec<(u64, PathBuf)>,
     /// Printing under way, or how the last one went.
     print_status: Option<PrintStatus>,
 }
@@ -567,9 +580,12 @@ impl App {
         root.tabs = startup
             .tabs
             .into_iter()
-            .map(|(id, path)| Tab::new(id, path))
+            .map(|(id, path)| Tab {
+                restored: startup.restored,
+                ..Tab::new(id, path)
+            })
             .collect();
-        root.active = root.tabs.len().saturating_sub(1);
+        root.active = startup.active.min(root.tabs.len().saturating_sub(1));
 
         // Checked, if due, from the second frame on.
         let updates = Updates::new(
@@ -611,6 +627,7 @@ impl App {
             file_worker: None,
             raise,
             updates,
+            deferred: startup.deferred,
             print_status: None,
         }
     }
@@ -774,8 +791,14 @@ impl App {
         }
     }
 
-    /// Lets go of a tab taken out of its window.
+    /// Lets go of a tab taken out of its window, keeping where it was read.
     fn drop_tab(&mut self, tab: Tab) {
+        if tab.doc.is_some()
+            && let Some(position) = tab.view.saved_position()
+        {
+            self.settings.set_position(&tab.path, position);
+        }
+        self.settings_dirty = true;
         if let Some(watcher) = self.watcher.as_mut() {
             watcher.unwatch(&tab.path);
         }
@@ -884,6 +907,12 @@ impl App {
                         } else if let Some((block, offset)) = tab.restore.take() {
                             let last = loaded.doc.blocks.len().saturating_sub(1);
                             tab.view.jump_to(block.min(last), offset);
+                        } else if tab.doc.is_none()
+                            && let Some((block, offset)) = self.settings.position(&tab.path)
+                        {
+                            // Opened again: where it was left last time.
+                            let last = loaded.doc.blocks.len().saturating_sub(1);
+                            tab.view.jump_to(block.min(last), offset);
                         }
                         tab.doc = Some(loaded.doc);
                         tab.encoding = loaded.encoding;
@@ -904,7 +933,14 @@ impl App {
                         }
                     }
                     Err(error) => {
-                        if tab.doc.is_some() {
+                        if tab.doc.is_none() && tab.restored && error.not_found {
+                            // A file of the last session, gone since.
+                            let path = tab.path.clone();
+                            let tab = self.windows[w].remove_tab(index);
+                            self.drop_tab(tab);
+                            self.settings.remove_recent(&path);
+                            self.settings_dirty = true;
+                        } else if tab.doc.is_some() {
                             tab.deleted = error.not_found;
                         } else {
                             // Worded here: the first loads start before the
@@ -1049,6 +1085,9 @@ impl App {
     }
 
     fn start_background_services(&mut self) {
+        for (id, path) in std::mem::take(&mut self.deferred) {
+            spawn_load(self.sender.clone(), self.ctx_cell.clone(), id, 0, path);
+        }
         let sender = self.sender.clone();
         let cell = self.ctx_cell.clone();
         if let Ok(mut watcher) = FileWatcher::new(move |path| {
@@ -2333,8 +2372,42 @@ impl App {
 
     fn save_settings_if_needed(&mut self) {
         if std::mem::take(&mut self.settings_dirty) {
+            self.remember_session();
             self.settings.save_in_background();
         }
+    }
+
+    /// Puts the open tabs and where each is read into the settings: the
+    /// session the next start without files opens again.
+    fn remember_session(&mut self) {
+        let mut session = Vec::new();
+        let mut active = 0;
+        for (w, window) in self.windows.iter().enumerate() {
+            for (i, tab) in window.tabs.iter().enumerate() {
+                if w == 0 && i == window.active {
+                    active = session.len();
+                }
+                session.push(tab.path.clone());
+            }
+        }
+        // The tab in front last, so that it is first in the list.
+        let tabs: Vec<(PathBuf, (usize, f32))> = self
+            .all_tabs()
+            .filter(|t| t.doc.is_some())
+            .filter_map(|t| Some((t.path.clone(), t.view.saved_position()?)))
+            .collect();
+        for (path, position) in tabs {
+            self.settings.set_position(&path, position);
+        }
+        if let Some(tab) = self.windows[0].active_tab()
+            && tab.doc.is_some()
+            && let Some(position) = tab.view.saved_position()
+        {
+            let path = tab.path.clone();
+            self.settings.set_position(&path, position);
+        }
+        self.settings.session = session;
+        self.settings.session_active = active;
     }
 
     /// One frame of the current window.
@@ -2639,6 +2712,7 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if self.bench.is_none() {
+            self.remember_session();
             self.settings.save();
         }
     }
