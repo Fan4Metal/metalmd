@@ -15,6 +15,7 @@ mod app;
 mod bench;
 mod caption;
 mod edit;
+mod editor;
 mod fonts;
 mod fs_text;
 mod icon;

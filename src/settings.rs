@@ -119,6 +119,9 @@ pub struct Settings {
     pub session_active: usize,
     /// Where recently read documents were left, the last read first.
     pub positions: Vec<ReadingPosition>,
+    /// The editor Ctrl+E opens documents in, chosen in a tab's context
+    /// menu; `None` for the first known one installed.
+    pub editor: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -142,6 +145,7 @@ impl Default for Settings {
             session: Vec::new(),
             session_active: 0,
             positions: Vec::new(),
+            editor: None,
         }
     }
 }

@@ -72,6 +72,7 @@ enum Failed {
     Tick,
     Highlight,
     Copy,
+    Editor,
 }
 
 impl Failed {
@@ -87,6 +88,7 @@ impl Failed {
         match self {
             Failed::Tick | Failed::Highlight => tr!("not saved", "не сохранено"),
             Failed::Copy => tr!("not copied", "не скопировано"),
+            Failed::Editor => tr!("editor not started", "редактор не запущен"),
         }
     }
 
@@ -102,6 +104,10 @@ impl Failed {
                 "Выделение цветом не сохранено:"
             ),
             Failed::Copy => tr!("The Markdown was not copied:", "Markdown не скопирован:"),
+            Failed::Editor => tr!(
+                "The editor could not be started:",
+                "Не удалось запустить редактор:"
+            ),
         }
     }
 }
@@ -446,6 +452,8 @@ struct TabDrag {
 
 /// What a tab's context menu asked for.
 enum TabMenu {
+    Edit(usize),
+    ChooseEditor(usize),
     Detach(usize),
     ToRoot(usize),
     CloseOthers(usize),
@@ -1493,6 +1501,43 @@ impl App {
         }
     }
 
+    /// Opens tab `index`'s file in the editor, at the line of the first
+    /// block in view.
+    fn open_in_editor(&mut self, index: usize) {
+        let exe = crate::editor::editor(self.settings.editor.as_deref());
+        let Some(tab) = self.win().tabs.get_mut(index) else {
+            return;
+        };
+        let line = tab
+            .doc
+            .as_ref()
+            .zip(tab.view.reading_position())
+            .and_then(|(doc, (block, _))| doc.lines.get(block).copied())
+            .unwrap_or(1);
+        if let Err(error) = crate::editor::open(&exe, &tab.path, line) {
+            tab.failed = Some((Failed::Editor, error));
+        }
+    }
+
+    /// Asks for the editor's program; `true` if one was chosen.
+    fn choose_editor(&mut self) -> bool {
+        let current = crate::editor::editor(self.settings.editor.as_deref());
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(tr!("Choose the editor", "Выбор редактора"))
+            .add_filter(tr!("Programs", "Программы"), &["exe"]);
+        if let Some(dir) = current.parent() {
+            dialog = dialog.set_directory(dir);
+        }
+        match dialog.pick_file() {
+            Some(exe) => {
+                self.settings.editor = Some(exe);
+                self.settings_dirty = true;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Ctrl+Shift+T: opens the tab closed last, where it was left.
     fn reopen_closed_tab(&mut self) {
         while let Some(path) = self.closed_tabs.pop() {
@@ -1688,6 +1733,10 @@ impl App {
         if consume(command(Key::P)) {
             self.print_document(ctx, false);
         }
+        if consume(command(Key::E)) {
+            let active = self.win().active;
+            self.open_in_editor(active);
+        }
         if consume(command_shift(Key::S)) {
             self.print_document(ctx, true);
         }
@@ -1864,6 +1913,23 @@ impl App {
                             drag_start = Some((tab_id, grab));
                         }
                         response.context_menu(|ui| {
+                            let edit =
+                                egui::Button::new(tr!("Open in the editor", "Открыть в редакторе"))
+                                    .shortcut_text("Ctrl+E");
+                            if ui.add(edit).clicked() {
+                                menu_action = Some(TabMenu::Edit(i));
+                                ui.close();
+                            }
+                            let editor = crate::editor::editor(self.settings.editor.as_deref());
+                            if ui
+                                .button(tr!("Choose the editor…", "Выбрать редактор…"))
+                                .on_hover_text(editor.display().to_string())
+                                .clicked()
+                            {
+                                menu_action = Some(TabMenu::ChooseEditor(i));
+                                ui.close();
+                            }
+                            ui.separator();
                             if tab_count > 1
                                 && ui
                                     .button(tr!("Move to a new window", "В новое окно"))
@@ -2012,6 +2078,12 @@ impl App {
             self.close_tab(i);
         }
         match menu_action {
+            Some(TabMenu::Edit(i)) => self.open_in_editor(i),
+            Some(TabMenu::ChooseEditor(i)) => {
+                if self.choose_editor() {
+                    self.open_in_editor(i);
+                }
+            }
             Some(TabMenu::Detach(i)) => self.detach_tab(cur, i, None),
             Some(TabMenu::ToRoot(i)) => {
                 self.move_tab_to_window(cur, i, 0);

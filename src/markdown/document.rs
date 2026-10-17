@@ -235,6 +235,8 @@ pub struct Scripts {
 #[derive(Clone, Debug, Default)]
 pub struct Document {
     pub blocks: Vec<Block>,
+    /// The line (from 1) each top-level block starts at in the file.
+    pub lines: Vec<usize>,
     pub headings: Vec<HeadingEntry>,
     /// Anchor id → top-level block index (headings, footnotes, block ids).
     pub anchors: HashMap<String, usize>,
@@ -287,12 +289,16 @@ impl Document {
             }
         }
         let mut blocks = Vec::new();
+        let mut lines = Vec::new();
         for child in root.children() {
             // One comrak block can become zero blocks (a comment) or several
             // (an HTML block with two paragraphs), so the index is the length
             // of the output, not the child's position.
             builder.top = blocks.len();
             builder.block(child, &mut blocks);
+            // Preprocessing keeps lines, so this is the file's line.
+            let line = child.data().sourcepos.start.line;
+            lines.resize(blocks.len(), line);
         }
         let sources = builder.track.take().map(|tracker| {
             passes.extend(rewrites.into_iter().flatten());
@@ -303,6 +309,7 @@ impl Document {
         });
         let doc = Document {
             blocks,
+            lines,
             headings: builder.headings,
             anchors: builder.anchors,
             search: builder.search,
@@ -1510,6 +1517,24 @@ mod tests {
             Inline::Text(rich) => rich,
             other => panic!("not text: {other:?}"),
         }
+    }
+
+    #[test]
+    fn every_top_level_block_knows_its_line() {
+        let doc = Document::parse(
+            "---\ntitle: x\n---\n# Head\n\ntext [[Note]]\nmore\n\n<p>a</p>\n\n<p>b</p>\n\n- item\n",
+        );
+        assert_eq!(doc.lines.len(), doc.blocks.len());
+        let line_of =
+            |pred: &dyn Fn(&Block) -> bool| doc.lines[doc.blocks.iter().position(pred).unwrap()];
+        assert_eq!(line_of(&|b| matches!(b, Block::FrontMatter { .. })), 1);
+        assert_eq!(line_of(&|b| matches!(b, Block::Heading { .. })), 4);
+        assert_eq!(line_of(&|b| matches!(b, Block::List { .. })), 13);
+        assert!(
+            doc.lines.windows(2).all(|w| w[0] <= w[1]),
+            "{:?}",
+            doc.lines
+        );
     }
 
     #[test]

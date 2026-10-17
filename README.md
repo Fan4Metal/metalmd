@@ -40,6 +40,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 - **Highlighting**: "Highlight" in the context menu of selected text, or `Ctrl+H`, wraps it in `==…==` in the file, each paragraph on its own; "Remove highlight" in the menu of highlighted text takes the marks away. `Ctrl+Z` undoes it as it undoes ticks.
 - **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied, as plain text or as the Markdown it was written in ("Copy as Markdown" in the context menu, `Ctrl+Shift+C`). A selection that starts or ends inside emphasis, a link or a formula takes in all of it, and one that starts a paragraph takes in its markup (`#`, `-`, `>`).
 - **Print and PDF**: the printer button or `Ctrl+P` opens the print dialog with its preview, and `Ctrl+Shift+S` saves the document as PDF (A4, or Letter where inches are used). Formulas and diagrams print as sharp as the text, code keeps its colours, and links stay links in the PDF. The page is laid out by WebView2, the Edge engine that comes with Windows, started only when printing; without it the document opens in the browser with its print dialog.
+- **Open in the editor**: `Ctrl+E` (or the tab's context menu) opens the file in VS Code, Cursor, Notepad++ or Sublime Text at the line being read, whichever is installed, or in another editor chosen in the same menu; Notepad when there is none.
 - **Light, dark or system theme**, and zoom.
 - **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`).
 - **Any encoding**: UTF-8, UTF-16 and legacy code pages (Windows-1251, GBK, Shift_JIS and others) are detected automatically.
@@ -87,6 +88,7 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | `Ctrl+Tab`, `Ctrl+Shift+Tab` (`Ctrl+PageDown`, `Ctrl+PageUp`) | Next and previous tab |
 | `Ctrl+F` | Find |
 | `Ctrl+P` | Print |
+| `Ctrl+E` | Open the file in the editor at the line being read |
 | `Ctrl+Shift+S` | Save as PDF |
 | `Enter`, `F3` / `Shift+Enter`, `Shift+F3` | Next and previous match |
 | `Esc` | Close find |
