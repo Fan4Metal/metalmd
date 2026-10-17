@@ -122,6 +122,10 @@ pub struct Settings {
     /// The editor Ctrl+E opens documents in, chosen in a tab's context
     /// menu; `None` for the first known one installed.
     pub editor: Option<PathBuf>,
+    /// Find matches case (Alt+C in the find bar).
+    pub find_case: bool,
+    /// Find matches whole words only (Alt+W).
+    pub find_words: bool,
 }
 
 impl Default for Settings {
@@ -146,6 +150,8 @@ impl Default for Settings {
             session_active: 0,
             positions: Vec::new(),
             editor: None,
+            find_case: false,
+            find_words: false,
         }
     }
 }

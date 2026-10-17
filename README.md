@@ -38,7 +38,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 - **Session**: started without files, MetalMD reopens the tabs of its last run, and a document opens again where it was left. `Ctrl+Shift+T` brings back a closed tab, `Alt+←` and `Alt+→` go back and forward along links and the table of contents.
 - **Task lists can be ticked**: a click on a box switches `- [ ]` and `- [x]` in the file itself. Only that character changes; the encoding and line endings stay as they were. `Ctrl+Z` undoes the ticks one by one, as long as the file has not been changed by another program since.
 - **Highlighting**: "Highlight" in the context menu of selected text, or `Ctrl+H`, wraps it in `==…==` in the file, each paragraph on its own; "Remove highlight" in the menu of highlighted text takes the marks away. `Ctrl+Z` undoes it as it undoes ticks.
-- **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied, as plain text or as the Markdown it was written in ("Copy as Markdown" in the context menu, `Ctrl+Shift+C`). A selection that starts or ends inside emphasis, a link or a formula takes in all of it, and one that starts a paragraph takes in its markup (`#`, `-`, `>`).
+- **Find** in the document with `Ctrl+F`, matching case (`Alt+C`) or whole words (`Alt+W`) if asked; the matches are marked along the scroll bar. Text can be selected across paragraphs and copied, as plain text or as the Markdown it was written in ("Copy as Markdown" in the context menu, `Ctrl+Shift+C`). A selection that starts or ends inside emphasis, a link or a formula takes in all of it, and one that starts a paragraph takes in its markup (`#`, `-`, `>`).
 - **Print and PDF**: the printer button or `Ctrl+P` opens the print dialog with its preview, and `Ctrl+Shift+S` saves the document as PDF (A4, or Letter where inches are used). Formulas and diagrams print as sharp as the text, code keeps its colours, and links stay links in the PDF. The page is laid out by WebView2, the Edge engine that comes with Windows, started only when printing; without it the document opens in the browser with its print dialog.
 - **Open in the editor**: `Ctrl+E` (or the tab's context menu) opens the file in VS Code, Cursor, Notepad++ or Sublime Text at the line being read, whichever is installed, or in another editor chosen in the same menu; Notepad when there is none.
 - **Light, dark or system theme**, and zoom.
@@ -92,6 +92,7 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | `Ctrl+Shift+S` | Save as PDF |
 | `Enter`, `F3` / `Shift+Enter`, `Shift+F3` | Next and previous match |
 | `Esc` | Close find |
+| `Alt+C` / `Alt+W` | In find: match case / whole words |
 | `Ctrl+Shift+O` | Show or hide the table of contents |
 | `F5`, `Ctrl+R` | Reload the file |
 | `Ctrl+C` | Copy the selected text |

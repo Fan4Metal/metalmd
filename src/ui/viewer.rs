@@ -462,6 +462,7 @@ pub fn show_document(
         view.viewport_height = viewport.height();
     });
     view.scroll_id = Some(output.id);
+    paint_find_marks(ui, output.inner_rect, output.content_size.y, &offsets, rc);
     view.offsets = offsets;
     view.details = std::mem::take(&mut rc.details);
     view.selected = std::mem::take(&mut rc.selected);
@@ -474,6 +475,34 @@ pub fn show_document(
     if view.hover != rc.new_hover {
         view.hover = rc.new_hover;
         ui.ctx().request_repaint();
+    }
+}
+
+/// Marks where the find matches are along the right edge of the view, as
+/// the scroll bar maps the document onto it: one per block, the current
+/// match's in its own colour.
+fn paint_find_marks(ui: &Ui, view: Rect, content_height: f32, offsets: &[f32], rc: &RenderCtx<'_>) {
+    let find = rc.find;
+    let last = offsets.len().saturating_sub(1);
+    if !find.open || find.matches.is_empty() || content_height <= view.height() || last == 0 {
+        return;
+    }
+    let y_of =
+        |block: usize| view.top() + offsets[block.min(last)] / content_height * view.height();
+    let mark = |y: f32, color| {
+        let rect = Rect::from_min_max(pos2(view.right() - 8.0, y), pos2(view.right(), y + 3.0));
+        ui.painter().rect_filled(rect, 1.0, color);
+    };
+    let mut drawn = f32::NEG_INFINITY;
+    for m in &find.matches {
+        let y = y_of(m.block);
+        if y - drawn >= 2.0 {
+            mark(y, rc.palette.search_bg);
+            drawn = y;
+        }
+    }
+    if let Some(current) = find.current_match() {
+        mark(y_of(current.block), rc.palette.search_current_bg);
     }
 }
 

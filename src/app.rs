@@ -1779,6 +1779,21 @@ impl App {
             if consume(plain(Key::Escape)) {
                 self.win().find.close();
             }
+            let alt = |key| KeyboardShortcut::new(Modifiers::ALT, key);
+            let (case, words) = (consume(alt(Key::C)), consume(alt(Key::W)));
+            if case || words {
+                // Windows also types the letter (in the keyboard's layout),
+                // which would go into the query.
+                ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
+            }
+            if case {
+                self.settings.find_case = !self.settings.find_case;
+                self.settings_dirty = true;
+            }
+            if words {
+                self.settings.find_words = !self.settings.find_words;
+                self.settings_dirty = true;
+            }
         }
         if consume(KeyboardShortcut::new(Modifiers::ALT, Key::ArrowLeft))
             || ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra1))
@@ -2373,6 +2388,31 @@ impl App {
                         window.find.step(forward);
                         window.find_jump = true;
                         input.request_focus();
+                    }
+                    let toggle = |ui: &mut Ui, on: bool, text: RichText, tip: &str| {
+                        ui.add(egui::Button::selectable(on, text.size(13.0)))
+                            .on_hover_text(tip)
+                            .clicked()
+                    };
+                    let case_tip = tr!("Match case (Alt+C)", "Учитывать регистр (Alt+C)");
+                    if toggle(ui, self.settings.find_case, RichText::new("Aa"), case_tip) {
+                        self.settings.find_case = !self.settings.find_case;
+                        self.settings_dirty = true;
+                    }
+                    let words_tip = tr!("Whole words (Alt+W)", "Слово целиком (Alt+W)");
+                    let words = RichText::new("ab").underline();
+                    if toggle(ui, self.settings.find_words, words, words_tip) {
+                        self.settings.find_words = !self.settings.find_words;
+                        self.settings_dirty = true;
+                    }
+                    let options = crate::ui::find::FindOptions {
+                        case: self.settings.find_case,
+                        words: self.settings.find_words,
+                    };
+                    if window.find.options != options {
+                        window.find.options = options;
+                        window.find.current = 0;
+                        window.find_jump = true;
                     }
                     if let Some(doc) = doc.as_ref() {
                         window.find.refresh(doc);

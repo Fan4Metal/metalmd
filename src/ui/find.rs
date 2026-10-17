@@ -14,15 +14,26 @@ pub struct Match {
     pub range: Range<usize>,
 }
 
+/// How the query is matched.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FindOptions {
+    /// Upper and lower case differ.
+    pub case: bool,
+    /// Only where the query is not part of a longer word.
+    pub words: bool,
+}
+
 #[derive(Default)]
 pub struct FindState {
     pub open: bool,
     pub query: String,
+    /// Set from the settings by the find bar.
+    pub options: FindOptions,
     pub matches: Vec<Match>,
     pub current: usize,
     pub request_focus: bool,
-    /// What `matches` was computed for: (query, document pointer).
-    computed_for: Option<(String, usize)>,
+    /// What `matches` was computed for: (query, options, document pointer).
+    computed_for: Option<(String, FindOptions, usize)>,
 }
 
 impl FindState {
@@ -40,11 +51,15 @@ impl FindState {
     /// Recomputes matches when the query or the document changed. Returns
     /// true when they were recomputed.
     pub fn refresh(&mut self, doc: &Document) -> bool {
-        let key = (self.query.clone(), doc as *const Document as usize);
+        let key = (
+            self.query.clone(),
+            self.options,
+            doc as *const Document as usize,
+        );
         if self.computed_for.as_ref() == Some(&key) {
             return false;
         }
-        self.matches = find_all(doc, &self.query);
+        self.matches = find_all(doc, &self.query, self.options);
         self.current = self.current.min(self.matches.len().saturating_sub(1));
         self.computed_for = Some(key);
         true
@@ -82,15 +97,14 @@ impl FindState {
     }
 }
 
-/// Case-insensitive occurrences of `query` in the document, in document
-/// order.
-pub fn find_all(doc: &Document, query: &str) -> Vec<Match> {
+/// Occurrences of `query` in the document, in document order.
+pub fn find_all(doc: &Document, query: &str, options: FindOptions) -> Vec<Match> {
     let mut out = Vec::new();
     if query.is_empty() {
         return out;
     }
     for entry in &doc.search {
-        for range in find_in(&entry.text, query) {
+        for range in find_with(&entry.text, query, options) {
             out.push(Match {
                 id: entry.id,
                 block: entry.block,
@@ -99,6 +113,26 @@ pub fn find_all(doc: &Document, query: &str) -> Vec<Match> {
         }
     }
     out
+}
+
+/// Non-overlapping occurrences of `needle` in `hay` as `options` match
+/// them, as byte ranges of `hay`.
+pub fn find_with(hay: &str, needle: &str, options: FindOptions) -> Vec<Range<usize>> {
+    let found = if options.case {
+        hay.match_indices(needle)
+            .map(|(at, _)| at..at + needle.len())
+            .collect()
+    } else {
+        find_in(hay, needle)
+    };
+    if !options.words {
+        return found;
+    }
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    found
+        .into_iter()
+        .filter(|r| !word(hay[..r.start].chars().next_back()) && !word(hay[r.end..].chars().next()))
+        .collect()
 }
 
 /// Case-insensitive, non-overlapping occurrences of `needle` in `hay`, as
@@ -167,6 +201,35 @@ mod tests {
         for range in found {
             assert_eq!(hay[range].to_lowercase(), "мир");
         }
+    }
+
+    #[test]
+    fn case_and_whole_words_narrow_the_matches() {
+        let hay = "Мир, мирный мир; Word words word_x";
+        let case = FindOptions {
+            case: true,
+            words: false,
+        };
+        let words = FindOptions {
+            case: false,
+            words: true,
+        };
+        let both = FindOptions {
+            case: true,
+            words: true,
+        };
+        let texts = |options, needle| -> Vec<&str> {
+            find_with(hay, needle, options)
+                .into_iter()
+                .map(|r| &hay[r])
+                .collect()
+        };
+        assert_eq!(texts(FindOptions::default(), "мир"), ["Мир", "мир", "мир"]);
+        assert_eq!(texts(case, "мир"), ["мир", "мир"]);
+        assert_eq!(texts(words, "мир"), ["Мир", "мир"]);
+        assert_eq!(texts(both, "мир"), ["мир"]);
+        // `_` joins words, as in identifiers.
+        assert_eq!(texts(words, "word"), ["Word"]);
     }
 
     #[test]
