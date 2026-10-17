@@ -36,10 +36,25 @@ impl DiagramRenderer {
     pub fn peek(&self, source: &str, dark: bool) -> Option<Arc<Diagram>> {
         self.cache.peek(source, dark as u64)
     }
+
+    /// [`DiagramRenderer::get`] for the lightbox, under a variant of its
+    /// own: asked for at another scale than the document's, one texture
+    /// would be drawn again at every frame.
+    pub fn get_zoomed(&self, ctx: &Context, source: &str, dark: bool, scale: f32) -> State<Vec2> {
+        self.cache.get(ctx, source, ZOOMED | dark as u64, scale)
+    }
+
+    /// The lightbox's diagram as last drawn.
+    pub fn peek_zoomed(&self, source: &str, dark: bool) -> Option<Arc<Diagram>> {
+        self.cache.peek(source, ZOOMED | dark as u64)
+    }
 }
 
-fn render(source: &str, dark: u64, scale: f32) -> Result<Rendered<Vec2>, String> {
-    let mut theme = if dark == 1 {
+/// The variant bit of the lightbox's textures; the lowest bit is the theme.
+const ZOOMED: u64 = 2;
+
+fn render(source: &str, variant: u64, scale: f32) -> Result<Rendered<Vec2>, String> {
+    let mut theme = if variant & 1 == 1 {
         mermaid_svg::Theme::dark()
     } else {
         mermaid_svg::Theme::default()

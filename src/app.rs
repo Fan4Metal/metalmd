@@ -349,6 +349,8 @@ struct Window {
     hwnd: Option<isize>,
     /// Asks before a link starts a program or reaches another computer.
     confirm: ConfirmOpen,
+    /// A picture of the document shown on its own over the window.
+    lightbox: Option<crate::ui::lightbox::Lightbox>,
     /// How a detached window is made; `None` for the root.
     builder: Option<ViewportBuilder>,
     /// Its viewport has been shown, so its native window exists.
@@ -380,6 +382,7 @@ impl Window {
             title: String::new(),
             hwnd: None,
             confirm: ConfirmOpen::default(),
+            lightbox: None,
             builder,
             shown: false,
             outer: None,
@@ -1319,6 +1322,10 @@ impl App {
                 self.edit(Change::Tick(task));
                 return;
             }
+            ViewAction::ShowPicture(shown) => {
+                self.win().lightbox = Some(crate::ui::lightbox::Lightbox::new(shown));
+                return;
+            }
             ViewAction::CopyMarkdown => {
                 if let Some(tab) = self.win().active_tab()
                     && !tab.view.selection().is_empty()
@@ -1705,6 +1712,13 @@ impl App {
         let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
         let consume = |shortcut: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&shortcut));
 
+        if self.win().lightbox.is_some() {
+            // It takes the keys and the wheel from the document behind.
+            if consume(plain(Key::Escape)) {
+                self.win().lightbox = None;
+            }
+            return;
+        }
         self.zoom_with_wheel(ctx);
         if consume(plain(Key::F1)) {
             self.toggle_about();
@@ -2754,6 +2768,11 @@ impl App {
             && let Some(change) = self.text_panel.show(&ctx, &self.settings)
         {
             self.apply_text_change(&ctx, change);
+        }
+        if let Some(lightbox) = self.windows[cur].lightbox.as_mut()
+            && !lightbox.show(&ctx, &self.pictures, &palette)
+        {
+            self.windows[cur].lightbox = None;
         }
         if let Some(target) = self.windows[cur].confirm.show(&ctx) {
             self.open_target(target);

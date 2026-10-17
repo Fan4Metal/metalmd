@@ -59,6 +59,8 @@ pub enum ViewAction {
     /// Remove the highlights the selection touches, or with none the one
     /// the context menu was opened on.
     Unhighlight,
+    /// Show an image or a diagram on its own, over the window.
+    ShowPicture(super::lightbox::Shown),
 }
 
 /// The text a context menu was opened on: the place under the pointer, and
@@ -1971,6 +1973,15 @@ fn draw_diagram(ui: &mut Ui, id: u32, source: &str, rc: &mut RenderCtx<'_>, salt
             ui.painter()
                 .image(diagram.texture.id(), shown, uv, Color32::WHITE);
         }
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::ZoomIn);
+        }
+        if response.clicked() {
+            rc.actions
+                .push(ViewAction::ShowPicture(super::lightbox::Shown::Diagram(
+                    source.to_owned(),
+                )));
+        }
         response.context_menu(|ui| {
             if ui
                 .button(tr!(
@@ -2060,10 +2071,10 @@ fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) -> Response
         }
         response
     };
-    let Some(uri) = image_uri(&image.src, rc.base_dir) else {
+    let Some(source_uri) = image_uri(&image.src, rc.base_dir) else {
         return fallback(ui, rc);
     };
-    let uri = super::animation::frame_uri(ui.ctx(), &uri).unwrap_or(uri);
+    let uri = super::animation::frame_uri(ui.ctx(), &source_uri).unwrap_or(source_uri.clone());
     // Space before an image that follows text on the same row.
     let mut widget = egui::Image::new(uri)
         .show_loading_spinner(true)
@@ -2087,18 +2098,27 @@ fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) -> Response
     {
         return fallback(ui, rc);
     }
-    let sense = if image.link.is_some() {
-        Sense::click()
-    } else {
-        Sense::hover()
-    };
-    let response = ui.add(widget.sense(sense));
-    if let Some(link) = &image.link {
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    let response = ui.add(widget.sense(Sense::click()));
+    match &image.link {
+        Some(link) => {
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            if response.clicked() {
+                rc.actions.push(ViewAction::OpenLink(link.clone()));
+            }
         }
-        if response.clicked() {
-            rc.actions.push(ViewAction::OpenLink(link.clone()));
+        // Not a link: a click shows it on its own.
+        None => {
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::ZoomIn);
+            }
+            if response.clicked() {
+                rc.actions
+                    .push(ViewAction::ShowPicture(super::lightbox::Shown::Image(
+                        source_uri,
+                    )));
+            }
         }
     }
     response

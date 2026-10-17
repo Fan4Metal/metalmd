@@ -29,6 +29,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 - **Code highlighting** for about 200 languages, in colours that follow the light or dark theme.
 - **Formulas**: `$…$` and `$$…$$` are typeset as KaTeX does it, by [RaTeX](https://github.com/erweixin/RaTeX), a port of KaTeX to Rust.
 - **Colour emoji**, drawn with the system emoji font (Segoe UI Emoji).
+- **Pictures on their own**: a click on an image or a diagram shows it over the window, fitted to it; the wheel zooms (diagrams are drawn again, sharp at any size), a drag moves it, a double click switches between 100 % and fitted.
 - **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
 - **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` that opens and closes with a click on its summary, and other tags common in READMEs.
 - **Fonts and text size**: the Aa button opens a panel where the text font, the code font and the text size are chosen from the fonts installed in the system, and the colour of highlighted text (`==…==`) from six or any other, separately for the light and the dark theme. Changes apply at once. Variable fonts get their bold and italic from their axes, and a family without italic is slanted.
