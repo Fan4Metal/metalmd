@@ -43,12 +43,15 @@ fn render(tex: &str, variant: u64, ppem: f32) -> Result<Rendered<Metrics>, Strin
     render_tex(tex, display, color, ppem)
 }
 
-fn render_tex(
+/// Lays `tex` out as SVG with `ppem` user units per em and `padding` units
+/// around it, the glyphs as outlines.
+fn tex_svg(
     tex: &str,
     display: bool,
     color: [u8; 4],
     ppem: f32,
-) -> Result<Rendered<Metrics>, String> {
+    padding: f32,
+) -> Result<(String, Metrics), String> {
     use ratex_layout::LayoutOptions;
     use ratex_types::math_style::MathStyle;
 
@@ -75,11 +78,41 @@ fn render_tex(
     };
     let svg_options = ratex_svg::SvgOptions {
         font_size: ppem as f64,
-        padding: PAD_PX as f64,
+        padding: padding as f64,
         embed_glyphs: true,
         ..Default::default()
     };
-    let svg = ratex_svg::render_to_svg(&list, &svg_options);
+    Ok((ratex_svg::render_to_svg(&list, &svg_options), metrics))
+}
+
+/// `tex` as an SVG element for a web page, sized in ems so that it follows
+/// the text around it, and set on the baseline (for printing).
+pub fn html_svg(tex: &str, display: bool, color: [u8; 4]) -> Result<String, String> {
+    // The units per em only set the precision of the numbers written.
+    let (svg, m) = tex_svg(tex, display, color, 40.0, 0.0)?;
+    // ratex-svg sizes the SVG in `pt`; the view box stays.
+    let size = svg
+        .find(" width=")
+        .zip(svg.find('>'))
+        .ok_or("no SVG element")?;
+    let total = m.height + m.depth;
+    Ok(format!(
+        "{} width=\"{:.4}em\" height=\"{:.4}em\" style=\"vertical-align:{:.4}em\"{}",
+        &svg[..size.0],
+        m.width,
+        total,
+        -m.depth,
+        &svg[size.1..]
+    ))
+}
+
+fn render_tex(
+    tex: &str,
+    display: bool,
+    color: [u8; 4],
+    ppem: f32,
+) -> Result<Rendered<Metrics>, String> {
+    let (svg, metrics) = tex_svg(tex, display, color, ppem, PAD_PX)?;
     let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default())
         .map_err(|e| e.to_string())?;
     // The SVG gives its size in `pt`, which usvg turns into 4/3 as many
@@ -119,6 +152,15 @@ mod tests {
         let variant = (u32::from_be_bytes(color.to_array()) as u64) << 1 | 1;
         assert_eq!(variant & 1, 1);
         assert_eq!(((variant >> 1) as u32).to_be_bytes(), [1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn formulas_for_a_page_are_sized_in_ems() {
+        let svg = html_svg(r"rac{a}{b}", false, [0, 0, 0, 255]).unwrap();
+        assert!(svg.starts_with("<svg "), "{svg}");
+        assert!(svg.contains("em\" height=\"") && svg.contains("viewBox="));
+        assert!(!svg.contains("pt\""), "{svg}");
+        assert!(svg.contains("vertical-align:-0."), "{svg}");
     }
 
     #[test]

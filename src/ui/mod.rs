@@ -221,6 +221,63 @@ pub fn open_button(ui: &mut Ui) -> Response {
     )
 }
 
+/// What the print button's menu asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintChoice {
+    Print,
+    Pdf,
+}
+
+/// Prints the document or saves it as PDF, from the menu a click opens: a
+/// printer, its paper going in at the top and coming out at the front.
+pub fn print_button(ui: &mut Ui, enabled: bool) -> Option<PrintChoice> {
+    use egui::{Rect, Stroke, StrokeKind, pos2};
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            icon_button(
+                ui,
+                "print_icon",
+                false,
+                tr!("Print or save as PDF", "Печать или сохранение в PDF"),
+                |painter, c, color, fill| {
+                    let stroke = Stroke::new(1.3, color);
+                    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| {
+                        Rect::from_min_max(pos2(c.x + x0, c.y + y0), pos2(c.x + x1, c.y + y1))
+                    };
+                    // The paper going in, behind the body.
+                    painter.rect_stroke(
+                        rect(-4.0, -6.5, 4.0, -1.0),
+                        1.0,
+                        stroke,
+                        StrokeKind::Middle,
+                    );
+                    let body = rect(-6.5, -2.5, 6.5, 3.5);
+                    painter.rect_filled(body, 2.0, fill);
+                    painter.rect_stroke(body, 2.0, stroke, StrokeKind::Middle);
+                    // The printed sheet over the body's front.
+                    let sheet = rect(-4.0, 1.0, 4.0, 6.5);
+                    painter.rect_filled(sheet, 1.0, fill);
+                    painter.rect_stroke(sheet, 1.0, stroke, StrokeKind::Middle);
+                    painter.circle_filled(pos2(c.x + 4.3, c.y - 0.5), 0.8, color);
+                },
+            )
+        })
+        .inner;
+    let mut choice = None;
+    egui::Popup::menu(&response).show(|ui| {
+        let print = egui::Button::new(tr!("Print…", "Печать…")).shortcut_text("Ctrl+P");
+        if ui.add(print).clicked() {
+            choice = Some(PrintChoice::Print);
+        }
+        let pdf = egui::Button::new(tr!("Save as PDF…", "Сохранить как PDF…"))
+            .shortcut_text("Ctrl+Shift+S");
+        if ui.add(pdf).clicked() {
+            choice = Some(PrintChoice::Pdf);
+        }
+    });
+    choice
+}
+
 /// The line through `points` with each corner cut `radius[i]` along both
 /// its sides (less on a short side) and bridged by a curve, so that a line
 /// icon looks drawn with a round pen; a radius of 0 keeps the point as it

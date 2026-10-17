@@ -20,6 +20,7 @@ mod fs_text;
 mod icon;
 mod markdown;
 mod placement;
+mod print;
 mod settings;
 mod single_instance;
 mod style;

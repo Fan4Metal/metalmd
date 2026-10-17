@@ -179,6 +179,41 @@ fn normalize_lang(lang: &str) -> String {
     mapped.to_owned()
 }
 
+/// The colors of code blocks (language, code) in the light theme, on the
+/// calling thread: for printing, which waits for them all.
+pub fn highlight_now(blocks: &[(&str, &str)]) -> Vec<Vec<HlSpan>> {
+    let syntaxes = two_face::syntax::extra_newlines();
+    let themes = two_face::theme::extra();
+    let light = themes.get(two_face::theme::EmbeddedThemeName::Github);
+    blocks
+        .iter()
+        .map(|(lang, code)| {
+            if lang.is_empty() || code.len() > MAX_HIGHLIGHT_BYTES {
+                Vec::new()
+            } else {
+                spans_of(&syntaxes, light, lang, code)
+            }
+        })
+        .collect()
+}
+
+/// The colors of `code` in `lang`, none for a language not known.
+fn spans_of(
+    syntaxes: &syntect::parsing::SyntaxSet,
+    theme: &syntect::highlighting::Theme,
+    lang: &str,
+    code: &str,
+) -> Vec<HlSpan> {
+    let lang = normalize_lang(lang);
+    let syntax = syntaxes
+        .find_syntax_by_token(&lang)
+        .or_else(|| syntaxes.find_syntax_by_extension(&lang));
+    match syntax {
+        Some(syntax) if lang != "txt" => highlight(syntaxes, syntax, theme, code),
+        _ => Vec::new(),
+    }
+}
+
 fn worker(receiver: Receiver<Job>, inner: Arc<Inner>) {
     let syntaxes = two_face::syntax::extra_newlines();
     let themes = two_face::theme::extra();
@@ -186,17 +221,8 @@ fn worker(receiver: Receiver<Job>, inner: Arc<Inner>) {
     let dark = themes.get(two_face::theme::EmbeddedThemeName::OneHalfDark);
 
     while let Ok(job) = receiver.recv() {
-        let lang = normalize_lang(&job.lang);
-        let syntax = syntaxes
-            .find_syntax_by_token(&lang)
-            .or_else(|| syntaxes.find_syntax_by_extension(&lang));
-        let spans = match syntax {
-            Some(syntax) if lang != "txt" => {
-                let theme = if job.key.1 { dark } else { light };
-                highlight(&syntaxes, syntax, theme, &job.code)
-            }
-            _ => Vec::new(),
-        };
+        let theme = if job.key.1 { dark } else { light };
+        let spans = spans_of(&syntaxes, theme, &job.lang, &job.code);
         // Unless dropped from the cache meanwhile.
         if let Some((entry, _)) = inner
             .cache

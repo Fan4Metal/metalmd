@@ -142,6 +142,24 @@ pub enum AppMsg {
         request: u64,
         spec: Option<Box<FontSpec>>,
     },
+    /// A print or PDF asked for in window `window` is done.
+    Printed {
+        window: u64,
+        pdf: bool,
+        result: Result<crate::print::Outcome, String>,
+    },
+}
+
+/// What printing says in the status line of the window it was asked in.
+struct PrintStatus {
+    window: u64,
+    text: &'static str,
+    /// On hover.
+    detail: Option<String>,
+    /// A PDF to open with a click.
+    pdf: Option<PathBuf>,
+    /// Shown until then; `None` while printing.
+    until: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -461,6 +479,8 @@ pub struct App {
     /// which runs while the window is minimized too.
     raise: Arc<AtomicBool>,
     updates: Updates,
+    /// Printing under way, or how the last one went.
+    print_status: Option<PrintStatus>,
 }
 
 impl App {
@@ -591,6 +611,7 @@ impl App {
             file_worker: None,
             raise,
             updates,
+            print_status: None,
         }
     }
 
@@ -986,6 +1007,11 @@ impl App {
                 self.settings_dirty = true;
                 self.reload_fonts(ctx);
             }
+            AppMsg::Printed {
+                window,
+                pdf,
+                result,
+            } => self.printed(window, pdf, result),
         }
     }
 
@@ -1069,6 +1095,130 @@ impl App {
         if let Some(paths) = dialog.pick_files() {
             self.open_paths(paths);
         }
+    }
+
+    /// Prints the active tab's document, or saves it as PDF where the
+    /// reader chooses, on a thread of its own (`crate::print`).
+    fn print_document(&mut self, ctx: &egui::Context, pdf: bool) {
+        let dark = ctx.theme() == Theme::Dark;
+        let window = &self.windows[self.current];
+        let (window_id, owner) = (window.id, window.hwnd);
+        let Some(tab) = window.active_tab() else {
+            return;
+        };
+        let Some(doc) = tab.doc.clone() else { return };
+        if self
+            .print_status
+            .as_ref()
+            .is_some_and(|s| s.until.is_none())
+        {
+            // One at a time: the status line shows the one under way.
+            return;
+        }
+        let output = if pdf {
+            let mut dialog = rfd::FileDialog::new()
+                .set_title(tr!("Save as PDF", "Сохранить как PDF"))
+                .add_filter("PDF", &["pdf"])
+                .set_file_name(crate::print::pdf_name(&tab.path));
+            if let Some(dir) = tab.path.parent() {
+                dialog = dialog.set_directory(dir);
+            }
+            let Some(mut path) = dialog.save_file() else {
+                return;
+            };
+            if path.extension().is_none() {
+                path.set_extension("pdf");
+            }
+            crate::print::Output::Pdf(path)
+        } else {
+            crate::print::Output::Printer
+        };
+        let light = Palette::new(false, self.settings.dark_style);
+        let mark = self.settings.mark_color(false).unwrap_or(light.mark_bg);
+        let page = crate::print::html::PageOptions {
+            title: tab.title.clone(),
+            base_dir: tab.path.parent().map(Path::to_path_buf),
+            body_font: self.settings.font.as_ref().map(|f| f.family.clone()),
+            mono_font: self.settings.mono_font.as_ref().map(|f| f.family.clone()),
+            text_px: body_size(),
+            mark_bg: [mark.r(), mark.g(), mark.b()],
+            toggled_details: tab.view.toggled_details().clone(),
+            print_on_load: false,
+        };
+        self.print_status = Some(PrintStatus {
+            window: window_id,
+            text: if pdf {
+                tr!("saving PDF…", "сохраняется PDF…")
+            } else {
+                tr!("printing…", "печать…")
+            },
+            detail: None,
+            pdf: None,
+            until: None,
+        });
+        let request = crate::print::Request {
+            doc,
+            page,
+            output,
+            owner,
+            dark,
+        };
+        let sender = self.sender.clone();
+        let cell = self.ctx_cell.clone();
+        crate::print::spawn(request, move |result| {
+            let _ = sender.send(AppMsg::Printed {
+                window: window_id,
+                pdf,
+                result,
+            });
+            request_repaint(&cell);
+        });
+    }
+
+    /// Shows how a print or PDF went in the status line.
+    fn printed(&mut self, window: u64, pdf: bool, result: Result<crate::print::Outcome, String>) {
+        use crate::print::Outcome;
+        let status = |text, detail, pdf, seconds| PrintStatus {
+            window,
+            text,
+            detail,
+            pdf,
+            until: Some(Instant::now() + Duration::from_secs(seconds)),
+        };
+        self.print_status = match result {
+            Ok(Outcome::Printed) => None,
+            Ok(Outcome::Saved(path)) => Some(status(
+                tr!("PDF saved", "PDF сохранён"),
+                Some(tr!(
+                    format!("{}\nClick to open it.", path.display()),
+                    format!("{}\nЩёлкните, чтобы открыть.", path.display())
+                )),
+                Some(path),
+                8,
+            )),
+            Ok(Outcome::InBrowser) => Some(status(
+                tr!("opened in the browser", "открыто в браузере"),
+                Some(
+                    tr!(
+                        "WebView2 is not installed, so the document was opened in the browser. Print it or save it as PDF from the browser's print dialog.",
+                        "WebView2 не установлен, поэтому документ открыт в браузере. Напечатайте его или сохраните в PDF из диалога печати браузера."
+                    )
+                    .to_owned(),
+                ),
+                None,
+                15,
+            )),
+            Err(error) => Some(status(
+                if pdf {
+                    tr!("PDF not saved", "PDF не сохранён")
+                } else {
+                    tr!("not printed", "не напечатано")
+                },
+                Some(error),
+                None,
+                15,
+            )),
+        };
     }
 
     fn handle_action(&mut self, ctx: &egui::Context, action: ViewAction) {
@@ -1444,6 +1594,12 @@ impl App {
         if consume(command(Key::O)) {
             self.open_dialog();
         }
+        if consume(command(Key::P)) {
+            self.print_document(ctx, false);
+        }
+        if consume(command_shift(Key::S)) {
+            self.print_document(ctx, true);
+        }
         if consume(command(Key::W)) && !self.win().tabs.is_empty() {
             let active = self.win().active;
             self.close_tab(active);
@@ -1547,6 +1703,7 @@ impl App {
         let mut activate = None;
         let mut close = None;
         let mut open_dialog = false;
+        let mut print_choice = None;
         let mut menu_action = None;
         let cur = self.current;
         let (wid, is_root) = (self.windows[cur].id, self.windows[cur].is_root());
@@ -1564,6 +1721,10 @@ impl App {
                     if crate::ui::open_button(ui).clicked() {
                         open_dialog = true;
                     }
+                    let printable = self.windows[cur]
+                        .active_tab()
+                        .is_some_and(|t| t.doc.is_some());
+                    print_choice = crate::ui::print_button(ui, printable);
                     ui.separator();
                     let tab_count = self.windows[cur].tabs.len();
                     let active = self.windows[cur].active;
@@ -1737,6 +1898,7 @@ impl App {
                                 }
                             }
                         }
+                        self.print_status_label(ui, palette, wid);
                     });
                 });
             });
@@ -1762,6 +1924,47 @@ impl App {
         }
         if open_dialog {
             self.open_dialog();
+        }
+        if let Some(choice) = print_choice {
+            let ctx = ui.ctx().clone();
+            self.print_document(&ctx, choice == crate::ui::PrintChoice::Pdf);
+        }
+    }
+
+    /// What printing says, in the window it was asked in: while under way,
+    /// then for a few seconds. A saved PDF opens with a click.
+    fn print_status_label(&mut self, ui: &mut Ui, palette: &Palette, window: u64) {
+        let Some(status) = self.print_status.as_ref() else {
+            return;
+        };
+        if let Some(until) = status.until {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                self.print_status = None;
+                return;
+            }
+            ui.ctx().request_repaint_after(left);
+        }
+        if status.window != window {
+            return;
+        }
+        let mut label =
+            egui::Label::new(RichText::new(status.text).size(12.0).color(palette.muted));
+        if status.pdf.is_some() {
+            label = label.sense(Sense::click());
+        }
+        let mut response = ui.add(label);
+        if let Some(detail) = &status.detail {
+            response = response.on_hover_text(detail);
+        }
+        if let Some(pdf) = status.pdf.clone() {
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            if response.clicked() {
+                std::thread::spawn(move || open::that_detached(pdf));
+                self.print_status = None;
+            }
         }
     }
 
@@ -2468,7 +2671,7 @@ fn file_url_path(target: &str) -> Option<String> {
 }
 
 /// `https:`, `mailto:` and the like, but not a Windows drive letter.
-fn has_url_scheme(target: &str) -> bool {
+pub(crate) fn has_url_scheme(target: &str) -> bool {
     match target.split_once(':') {
         Some((scheme, _)) => {
             scheme.len() > 1

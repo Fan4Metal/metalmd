@@ -119,6 +119,12 @@ pub struct ViewState {
 }
 
 impl ViewState {
+    /// The `<details>` the reader opened or closed, the other way from how
+    /// they are written (by `Block::Details::index`).
+    pub fn toggled_details(&self) -> &HashSet<u32> {
+        &self.details
+    }
+
     /// What of the document is selected, in document order.
     pub fn selection(&self) -> &[Selected] {
         &self.selected

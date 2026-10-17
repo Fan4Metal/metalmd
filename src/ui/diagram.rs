@@ -60,6 +60,37 @@ fn render(source: &str, dark: u64, scale: f32) -> Result<Rendered<Vec2>, String>
     Ok(Rendered { image, meta: size })
 }
 
+/// The diagram for `source` in the light theme as an SVG element for a web
+/// page (for printing): drawn by resvg's reading of it, as on the screen,
+/// with its text as outlines, its ids starting with `id_prefix` so that
+/// several can share a page, and its own size in points.
+pub fn html_svg(source: &str, id_prefix: &str) -> Result<String, String> {
+    let theme = mermaid_svg::Theme {
+        responsive: false,
+        ..mermaid_svg::Theme::default()
+    };
+    let svg = mermaid_svg::render_with(source, &theme).map_err(|e| e.to_string())?;
+    let tree =
+        resvg::usvg::Tree::from_str(&svg, super::svg::text_options()).map_err(|e| e.to_string())?;
+    let (origin, size) = drawn_area(&tree);
+    let options = resvg::usvg::WriteOptions {
+        id_prefix: Some(id_prefix.to_owned()),
+        ..Default::default()
+    };
+    let written = tree.to_string(&options);
+    // usvg writes `<svg width=… height=… xmlns=…`: the size it gives is
+    // replaced by the drawn area's, with a view box that takes it all in.
+    let attrs = written.find(" xmlns=").ok_or("no SVG element")?;
+    Ok(format!(
+        "<svg width=\"{w}\" height=\"{h}\" viewBox=\"{x} {y} {w} {h}\"{}",
+        &written[attrs..],
+        x = origin.x,
+        y = origin.y,
+        w = size.x,
+        h = size.y,
+    ))
+}
+
 /// The corner and the size of the area to draw: the SVG's own, grown to
 /// take in all it draws. mermaid-svg sizes it by the nodes, and the frame
 /// of a subgraph can reach past them, above the first one.
@@ -131,6 +162,21 @@ mod tests {
             "{frame:?} {:?}",
             tree.size()
         );
+    }
+
+    #[test]
+    fn a_diagram_for_a_page_has_its_drawn_size_and_own_ids() {
+        let source = "flowchart LR\n    A[Начало] --> B{Ветвь}\n";
+        let svg = html_svg(source, "d7-").unwrap();
+        let size = render(source, 0, 1.0).unwrap().meta;
+        assert!(
+            svg.starts_with(&format!("<svg width=\"{}\" height=\"{}\"", size.x, size.y)),
+            "{}",
+            &svg[..200]
+        );
+        assert_eq!(svg.matches("<svg").count(), 1);
+        assert!(!svg.contains("id=\"") || svg.contains("id=\"d7-"));
+        assert!(html_svg("not a diagram at all", "d-").is_err());
     }
 
     #[test]
