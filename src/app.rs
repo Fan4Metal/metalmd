@@ -193,6 +193,9 @@ fn copy_markdown(path: &Path, selection: &[Selected]) -> Result<String, String> 
 /// Windows narrower than this, in points, show no table of contents.
 const TOC_MIN_WINDOW: f32 = 560.0;
 
+/// Closed tabs Ctrl+Shift+T can open again.
+const MAX_CLOSED_TABS: usize = 25;
+
 /// The smallest window, in points.
 const MIN_WINDOW_SIZE: [f32; 2] = [420.0, 300.0];
 
@@ -259,6 +262,8 @@ struct Tab {
     restore: Option<(usize, f32)>,
     /// Positions to return to with Alt+Left.
     back: Vec<(usize, f32)>,
+    /// Positions gone back from, to return to with Alt+Right.
+    forward: Vec<(usize, f32)>,
     /// Reopened from the last run's session: if its file is gone, the tab
     /// closes instead of showing the error.
     restored: bool,
@@ -287,8 +292,37 @@ impl Tab {
             pending_anchor: None,
             restore: None,
             back: Vec::new(),
+            forward: Vec::new(),
             restored: false,
         }
+    }
+}
+
+impl Tab {
+    /// Jumps to the top of `block` from a link or the contents, so that
+    /// Alt+Left comes back here; the way forward starts anew.
+    fn jump_from_here(&mut self, block: usize) {
+        if let Some(position) = self.view.reading_position() {
+            self.back.push(position);
+        }
+        self.forward.clear();
+        self.view.jump_to(block, 8.0);
+    }
+
+    /// Goes one step back (`forward` false) or forward along the jumps.
+    fn step(&mut self, forward: bool) {
+        let (from, to) = if forward {
+            (&mut self.forward, &mut self.back)
+        } else {
+            (&mut self.back, &mut self.forward)
+        };
+        let Some((block, offset)) = from.pop() else {
+            return;
+        };
+        if let Some(position) = self.view.reading_position() {
+            to.push(position);
+        }
+        self.view.jump_to(block, offset);
     }
 }
 
@@ -492,6 +526,8 @@ pub struct App {
     updates: Updates,
     /// Restored tabs whose loading waits for the second frame.
     deferred: Vec<(u64, PathBuf)>,
+    /// Closed tabs' files, the last closed last, for Ctrl+Shift+T.
+    closed_tabs: Vec<PathBuf>,
     /// Printing under way, or how the last one went.
     print_status: Option<PrintStatus>,
 }
@@ -628,6 +664,7 @@ impl App {
             raise,
             updates,
             deferred: startup.deferred,
+            closed_tabs: Vec::new(),
             print_status: None,
         }
     }
@@ -799,6 +836,13 @@ impl App {
             self.settings.set_position(&tab.path, position);
         }
         self.settings_dirty = true;
+        if !tab.restored || tab.doc.is_some() {
+            self.closed_tabs.retain(|p| !same_path(p, &tab.path));
+            self.closed_tabs.push(tab.path.clone());
+            if self.closed_tabs.len() > MAX_CLOSED_TABS {
+                self.closed_tabs.remove(0);
+            }
+        }
         if let Some(watcher) = self.watcher.as_mut() {
             watcher.unwatch(&tab.path);
         }
@@ -1309,10 +1353,7 @@ impl App {
             };
             let Some(doc) = tab.doc.as_ref() else { return };
             if let Some(block) = resolve_anchor(doc, fragment) {
-                if let Some(position) = tab.view.reading_position() {
-                    tab.back.push(position);
-                }
-                tab.view.jump_to(block, 8.0);
+                tab.jump_from_here(block);
             }
             return;
         }
@@ -1445,11 +1486,22 @@ impl App {
         }
     }
 
-    fn go_back(&mut self) {
-        if let Some(tab) = self.win().active_tab_mut()
-            && let Some((block, offset)) = tab.back.pop()
-        {
-            tab.view.jump_to(block, offset);
+    /// Alt+Left and Alt+Right: back and forward along the jumps.
+    fn go_back(&mut self, forward: bool) {
+        if let Some(tab) = self.win().active_tab_mut() {
+            tab.step(forward);
+        }
+    }
+
+    /// Ctrl+Shift+T: opens the tab closed last, where it was left.
+    fn reopen_closed_tab(&mut self) {
+        while let Some(path) = self.closed_tabs.pop() {
+            // One open since is only shown.
+            if self.all_tabs().any(|t| same_path(&t.path, &path)) {
+                continue;
+            }
+            self.open_path(path, None);
+            return;
         }
     }
 
@@ -1682,7 +1734,15 @@ impl App {
         if consume(KeyboardShortcut::new(Modifiers::ALT, Key::ArrowLeft))
             || ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra1))
         {
-            self.go_back();
+            self.go_back(false);
+        }
+        if consume(KeyboardShortcut::new(Modifiers::ALT, Key::ArrowRight))
+            || ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra2))
+        {
+            self.go_back(true);
+        }
+        if consume(command_shift(Key::T)) {
+            self.reopen_closed_tab();
         }
 
         // Reading keys, unless a text field has the keyboard.
@@ -2504,10 +2564,7 @@ impl App {
                     }
                     if let Some(index) = toc::show(ui, doc, &tab.view, &palette) {
                         let block = doc.headings[index].block;
-                        if let Some(position) = tab.view.reading_position() {
-                            tab.back.push(position);
-                        }
-                        tab.view.jump_to(block, 8.0);
+                        tab.jump_from_here(block);
                     }
                 });
         }

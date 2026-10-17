@@ -35,6 +35,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 - **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
 - **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window. A tab dragged out of the window gets a window of its own, a tab dragged into another window joins it, and dragging along the bar rearranges them.
 - **Live reload**: a file changed on disk is reloaded at the same scroll position.
+- **Session**: started without files, MetalMD reopens the tabs of its last run, and a document opens again where it was left. `Ctrl+Shift+T` brings back a closed tab, `Alt+←` and `Alt+→` go back and forward along links and the table of contents.
 - **Task lists can be ticked**: a click on a box switches `- [ ]` and `- [x]` in the file itself. Only that character changes; the encoding and line endings stay as they were. `Ctrl+Z` undoes the ticks one by one, as long as the file has not been changed by another program since.
 - **Highlighting**: "Highlight" in the context menu of selected text, or `Ctrl+H`, wraps it in `==…==` in the file, each paragraph on its own; "Remove highlight" in the menu of highlighted text takes the marks away. `Ctrl+Z` undoes it as it undoes ticks.
 - **Find** in the document with `Ctrl+F`. Text can be selected across paragraphs and copied, as plain text or as the Markdown it was written in ("Copy as Markdown" in the context menu, `Ctrl+Shift+C`). A selection that starts or ends inside emphasis, a link or a formula takes in all of it, and one that starts a paragraph takes in its markup (`#`, `-`, `>`).
@@ -82,6 +83,7 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 |---|---|
 | `Ctrl+O` | Open a file |
 | `Ctrl+W`, middle click on a tab | Close the tab |
+| `Ctrl+Shift+T` | Reopen the tab closed last |
 | `Ctrl+Tab`, `Ctrl+Shift+Tab` (`Ctrl+PageDown`, `Ctrl+PageUp`) | Next and previous tab |
 | `Ctrl+F` | Find |
 | `Ctrl+P` | Print |
@@ -95,6 +97,7 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | `Ctrl+H` | Highlight the selection in the file |
 | `Ctrl+Z` | Undo the last tick of a task list item or highlight |
 | `Alt+←`, mouse Back button | Go back after following a link |
+| `Alt+→`, mouse Forward button | Go forward again |
 | `Ctrl+=` / `Ctrl+−` / `Ctrl+0`, `Ctrl`+wheel | Zoom in, out, reset |
 | `PageUp`, `PageDown`, `Space` / `Shift+Space`, arrows | Scroll |
 | `Home`, `End` (`Ctrl+Home`, `Ctrl+End`) | Go to the start or the end |
