@@ -58,11 +58,34 @@ pub fn refresh(hwnd: isize) {
     }
 }
 
-/// The visible top-level windows of this thread, for the windows egui
-/// makes for child viewports: eframe gives no handle for those. winit's
-/// hidden message window is left out.
+/// Hide window `hwnd` from the screen while it keeps working and painting
+/// (`DWMWA_CLOAK`), or show it again. Windows shows a new window before its
+/// first OpenGL frame reaches DWM, white: `App::new` cloaks the main window
+/// until it has painted a few frames (`App::uncloak`), and a detached
+/// window is cloaked the same way once found (`App::appear`).
 #[cfg(windows)]
-pub fn thread_windows() -> Vec<isize> {
+pub fn cloak(hwnd: isize, on: bool) {
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            attribute: u32,
+            value: *const core::ffi::c_void,
+            size: u32,
+        ) -> i32;
+    }
+    const DWMWA_CLOAK: u32 = 13;
+    let value = i32::from(on);
+    unsafe { DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, (&raw const value).cast(), 4) };
+}
+
+/// The top-level window of this thread titled `title`, hidden or not: the
+/// window egui makes for a child viewport, for which eframe gives no
+/// handle. By the title, not "the thread's other window": the thread has
+/// hidden windows of its own (the IME's), and a detached window is made
+/// hidden, under a title of its own until found (`hidden_title`).
+#[cfg(windows)]
+pub fn thread_window(title: &str) -> Option<isize> {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn EnumThreadWindows(
@@ -70,34 +93,39 @@ pub fn thread_windows() -> Vec<isize> {
             callback: unsafe extern "system" fn(isize, isize) -> i32,
             lparam: isize,
         ) -> i32;
-        fn IsWindowVisible(hwnd: isize) -> i32;
+        fn GetWindowTextW(hwnd: isize, text: *mut u16, max: i32) -> i32;
     }
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn GetCurrentThreadId() -> u32;
     }
     unsafe extern "system" fn collect(hwnd: isize, lparam: isize) -> i32 {
-        // SAFETY: `lparam` is the pointer to `out` passed below, and the
+        // SAFETY: `lparam` is the pointer to `all` passed below, and the
         // callback runs only during the call.
-        let out = unsafe { &mut *(lparam as *mut Vec<isize>) };
-        if unsafe { IsWindowVisible(hwnd) } != 0 {
-            out.push(hwnd);
-        }
+        let all = unsafe { &mut *(lparam as *mut Vec<isize>) };
+        all.push(hwnd);
         1
     }
-    let mut out: Vec<isize> = Vec::new();
+    let mut all: Vec<isize> = Vec::new();
     unsafe {
-        EnumThreadWindows(GetCurrentThreadId(), collect, (&raw mut out) as isize);
+        EnumThreadWindows(GetCurrentThreadId(), collect, (&raw mut all) as isize);
     }
-    out
+    all.into_iter().find(|&h| {
+        let mut text = [0u16; 128];
+        let n = unsafe { GetWindowTextW(h, text.as_mut_ptr(), text.len() as i32) };
+        n > 0 && String::from_utf16_lossy(&text[..n as usize]) == title
+    })
 }
 
 #[cfg(not(windows))]
 pub fn set_dark(_hwnd: isize, _dark: bool) {}
 
 #[cfg(not(windows))]
-pub fn thread_windows() -> Vec<isize> {
-    Vec::new()
+pub fn cloak(_hwnd: isize, _on: bool) {}
+
+#[cfg(not(windows))]
+pub fn thread_window(_title: &str) -> Option<isize> {
+    None
 }
 
 #[cfg(not(windows))]

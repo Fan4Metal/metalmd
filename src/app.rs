@@ -244,6 +244,20 @@ const MIN_WINDOW_SIZE: [f32; 2] = [420.0, 300.0];
 /// How long the window rests after a move or resize before it is saved.
 const WINDOW_SAVE_DELAY: Duration = Duration::from_secs(1);
 
+/// Frames a window paints, cloaked, before it is seen, and the longest the
+/// main window stays cloaked.
+const PAINTED_TO_SHOW: u64 = 3;
+const UNCLOAK_TIMEOUT: Duration = Duration::from_secs(1);
+/// Frames a detached window's native window is looked for before it is
+/// shown as it is.
+const LOOK_FRAMES: u32 = 10;
+
+/// The title a detached window is made with, hidden, until it is found
+/// (`App::appear`): unique, as two windows may show the same document.
+fn hidden_title(id: u64) -> String {
+    format!("MetalMD window {id}")
+}
+
 pub fn spawn_load(sender: Sender<AppMsg>, cell: CtxCell, tab: u64, generation: u64, path: PathBuf) {
     std::thread::Builder::new()
         .name("load".into())
@@ -389,8 +403,8 @@ struct Window {
     lightbox: Option<crate::ui::lightbox::Lightbox>,
     /// How a detached window is made; `None` for the root.
     builder: Option<ViewportBuilder>,
-    /// Its viewport has been shown, so its native window exists.
-    shown: bool,
+    /// How far a detached window is from being seen.
+    appear: Appear,
     /// Its frame and its content on the screen, in points, from the last
     /// frame it drew.
     outer: Option<Rect>,
@@ -419,8 +433,11 @@ impl Window {
             hwnd: None,
             confirm: ConfirmOpen::default(),
             lightbox: None,
+            appear: match builder {
+                None => Appear::Seen,
+                Some(_) => Appear::Looking(0),
+            },
             builder,
-            shown: false,
             outer: None,
             inner: None,
             tab_lead: 44.0,
@@ -476,6 +493,20 @@ impl Window {
             self.active += 1;
         }
     }
+}
+
+/// A detached window on its way to the screen. Windows shows a new window
+/// white until its first frame reaches DWM, so it is made hidden under
+/// `hidden_title`, found by that title, cloaked, given its caption and
+/// title, shown, and uncloaked once it has painted a few frames
+/// (`App::appear`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Appear {
+    /// Its native window not found yet: the frames looked.
+    Looking(u32),
+    /// Shown, cloaked if it was found: the frames painted since.
+    Painting(u64),
+    Seen,
 }
 
 /// A tab being dragged by its title.
@@ -582,6 +613,10 @@ pub struct App {
     print_status: Option<PrintStatus>,
     /// The right button's press held back until its release.
     right_click: crate::ui::menu::RightClick,
+    /// The main window is cloaked until it has painted a few frames (else
+    /// Windows showed it white before its first frame reached DWM): the
+    /// time it is shown anyway, the frame it was cloaked in, maximized.
+    cloak: Option<(Instant, u64, bool)>,
 }
 
 impl App {
@@ -600,8 +635,22 @@ impl App {
         // egui's first frame, Windows 10 would keep the caption of the
         // Windows theme. Following Windows, winit has already done it.
         let hwnd = crate::caption::hwnd(cc);
+        let mut cloak = None;
         if let Some(hwnd) = hwnd {
+            // Cloaked until it has painted a few frames (`uncloak`), so it
+            // is not seen white before the first one, nor while it is
+            // being maximized.
+            let maximized = startup.settings.window.is_some_and(|w| w.maximized);
+            crate::caption::cloak(hwnd, true);
+            cloak = Some((
+                Instant::now() + UNCLOAK_TIMEOUT,
+                ctx.cumulative_frame_nr(),
+                maximized,
+            ));
             crate::placement::keep_on_screen(hwnd);
+            if maximized {
+                crate::placement::show_maximized(hwnd);
+            }
             match startup.settings.theme {
                 ThemeSetting::Dark => crate::caption::set_dark(hwnd, true),
                 ThemeSetting::Light => crate::caption::set_dark(hwnd, false),
@@ -665,7 +714,6 @@ impl App {
             .unwrap_or(1);
         let mut root = Window::new(0, None);
         root.hwnd = hwnd;
-        root.shown = true;
         root.tabs = startup
             .tabs
             .into_iter()
@@ -720,6 +768,25 @@ impl App {
             closed_tabs: Vec::new(),
             print_status: None,
             right_click: Default::default(),
+            cloak,
+        }
+    }
+
+    /// Shows the main window once it has painted `PAINTED_TO_SHOW` frames
+    /// and, if it is to be, is maximized; after `UNCLOAK_TIMEOUT` anyway.
+    fn uncloak(&mut self, ctx: &egui::Context) {
+        let Some((until, frame, maximized)) = self.cloak else {
+            return;
+        };
+        let ready = ctx.cumulative_frame_nr() >= frame + PAINTED_TO_SHOW
+            && (!maximized || ctx.input(|i| i.viewport().maximized == Some(true)));
+        if ready || Instant::now() >= until {
+            if let Some(hwnd) = self.windows[0].hwnd {
+                crate::caption::cloak(hwnd, false);
+            }
+            self.cloak = None;
+        } else {
+            ctx.request_repaint();
         }
     }
 
@@ -765,27 +832,53 @@ impl App {
         self.shown_theme = Some(theme);
     }
 
-    /// Finds the native windows of viewports shown for the first time, for
-    /// their captions. eframe gives no handle for a child viewport, so they
-    /// are the visible top-level windows of this thread not seen before.
-    fn find_new_windows(&mut self, ctx: &egui::Context) {
-        if !self.windows.iter().any(|w| w.shown && w.hwnd.is_none()) {
-            return;
-        }
-        let known: Vec<isize> = self.windows.iter().filter_map(|w| w.hwnd).collect();
-        let mut fresh = crate::caption::thread_windows()
-            .into_iter()
-            .filter(|h| !known.contains(h));
-        let dark = ctx.theme() == Theme::Dark;
-        for window in self
-            .windows
-            .iter_mut()
-            .filter(|w| w.shown && w.hwnd.is_none())
-        {
-            let Some(hwnd) = fresh.next() else { break };
-            window.hwnd = Some(hwnd);
-            crate::caption::set_dark(hwnd, dark);
-            crate::caption::refresh(hwnd);
+    /// Brings the current detached window to the screen (`Appear`), at the
+    /// start of each of its frames (`ctx` is its viewport's). eframe gives
+    /// no handle for a child viewport, so its window is found by the title
+    /// it is made with; once found it is cloaked and gets the dark caption
+    /// while still hidden, then its real title, and is shown. Not found
+    /// within `LOOK_FRAMES`, it is shown as it is.
+    fn appear(&mut self, ctx: &egui::Context) {
+        let more = || {
+            ctx.request_repaint();
+            ctx.request_repaint_of(ViewportId::ROOT);
+        };
+        let cur = self.current;
+        match self.windows[cur].appear {
+            Appear::Looking(looked) => {
+                let known: Vec<isize> = self.windows.iter().filter_map(|w| w.hwnd).collect();
+                let found = crate::caption::thread_window(&hidden_title(self.windows[cur].id))
+                    .filter(|h| !known.contains(h));
+                let window = &mut self.windows[cur];
+                if let Some(hwnd) = found {
+                    crate::caption::cloak(hwnd, true);
+                    crate::caption::set_dark(hwnd, ctx.theme() == Theme::Dark);
+                    window.hwnd = Some(hwnd);
+                } else if looked < LOOK_FRAMES {
+                    window.appear = Appear::Looking(looked + 1);
+                    more();
+                    return;
+                }
+                window.appear = Appear::Painting(0);
+                // The title before the window shows, so the taskbar never
+                // has the one it was made with.
+                self.update_title(ctx);
+                ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                more();
+            }
+            Appear::Painting(painted) => {
+                let window = &mut self.windows[cur];
+                if painted + 1 >= PAINTED_TO_SHOW {
+                    if let Some(hwnd) = window.hwnd {
+                        crate::caption::cloak(hwnd, false);
+                    }
+                    window.appear = Appear::Seen;
+                } else {
+                    window.appear = Appear::Painting(painted + 1);
+                }
+                more();
+            }
+            Appear::Seen => {}
         }
     }
 
@@ -2348,8 +2441,10 @@ impl App {
         };
         let id = self.next_window_id;
         self.next_window_id += 1;
+        // Made hidden, under a title of its own, until found (`appear`).
         let builder = ViewportBuilder::default()
-            .with_title("MetalMD")
+            .with_visible(false)
+            .with_title(hidden_title(id))
             .with_inner_size(size)
             .with_position(position)
             .with_min_inner_size(MIN_WINDOW_SIZE)
@@ -2561,6 +2656,10 @@ impl App {
     }
 
     fn remember_window(&mut self, ctx: &egui::Context) {
+        // Not while the window is cloaked: it may not be in its place yet.
+        if self.cloak.is_some() {
+            return;
+        }
         // egui reports the window in zoomed points, and the next start
         // creates it before the zoom is set: kept unzoomed, it would shrink
         // by the zoom at each start.
@@ -2656,6 +2755,9 @@ impl App {
     fn window_ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let cur = self.current;
+        if cur != 0 {
+            self.appear(&ctx);
+        }
         let (inner, outer, focused, close_requested, maximized) = ctx.input(|i| {
             let v = i.viewport();
             (
@@ -2868,7 +2970,10 @@ impl App {
             );
         }
 
-        self.update_title(&ctx);
+        // A window not found yet keeps the title it is looked for by.
+        if !matches!(self.windows[cur].appear, Appear::Looking(_)) {
+            self.update_title(&ctx);
+        }
     }
 }
 
@@ -2886,6 +2991,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.frame += 1;
+        self.uncloak(&ctx);
         if self.frame == 1 {
             if let Some(b) = self.bench.as_mut() {
                 b.mark("first_frame_start");
@@ -2916,12 +3022,10 @@ impl eframe::App for App {
             let viewport = self.windows[i].viewport;
             let builder = self.windows[i].builder.clone().unwrap_or_default();
             ctx.show_viewport_immediate(viewport, builder, |ui, _class| self.window_ui(ui));
-            self.windows[i].shown = true;
             i += 1;
         }
         self.current = 0;
         self.close_windows();
-        self.find_new_windows(&ctx);
 
         self.follow_theme(&ctx);
         let zoom = ctx.zoom_factor();

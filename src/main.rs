@@ -132,7 +132,9 @@ fn main() -> eframe::Result {
                 .with_inner_size([window.width, window.height])
                 // `App::new` moves it back if it is off every screen.
                 .with_position([window.x, window.y])
-                .with_maximized(window.maximized);
+                // Not on Windows: winit would show the window before its
+                // first frame, white. `App::new` maximizes it, cloaked.
+                .with_maximized(window.maximized && cfg!(not(windows)));
             false
         }
         None => {

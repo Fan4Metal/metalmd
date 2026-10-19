@@ -2,7 +2,8 @@
 //! every screen (the monitor it was on is gone, or the resolution changed),
 //! and Windows would then show only a taskbar button. Checked once, while
 //! the window is still hidden, in physical pixels, so it works on any mix
-//! of monitors and scaling.
+//! of monitors and scaling. A window closed maximized comes back so
+//! through `show_maximized`.
 
 /// A Win32 `RECT`.
 #[repr(C)]
@@ -84,6 +85,24 @@ pub fn keep_on_screen(hwnd: isize) {
 
 #[cfg(not(windows))]
 pub fn keep_on_screen(_hwnd: isize) {}
+
+/// Maximizes window `hwnd`, made at its restored place, which it keeps for
+/// the restore button. winit shows a window made maximized at once, before
+/// its first frame (`SW_MAXIMIZE` before it hides it again), white, so
+/// `main` makes it unmaximized and `App::new` calls this while the window
+/// is still cloaked.
+#[cfg(windows)]
+pub fn show_maximized(hwnd: isize) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
+    }
+    const SW_SHOWMAXIMIZED: i32 = 3;
+    unsafe { ShowWindow(hwnd, SW_SHOWMAXIMIZED) };
+}
+
+#[cfg(not(windows))]
+pub fn show_maximized(_hwnd: isize) {}
 
 /// Restores window `hwnd` if it is minimized and puts it in front, for the
 /// files another launch hands over. Done with Win32 rather than viewport
