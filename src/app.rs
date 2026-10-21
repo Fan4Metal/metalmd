@@ -1371,6 +1371,10 @@ impl App {
             body_font: self.settings.font.as_ref().map(|f| f.family.clone()),
             mono_font: self.settings.mono_font.as_ref().map(|f| f.family.clone()),
             text_px: body_size(),
+            column_px: tab
+                .view
+                .column_width()
+                .unwrap_or(crate::style::DEFAULT_CONTENT_WIDTH),
             mark_bg: [mark.r(), mark.g(), mark.b()],
             toggled_details: tab.view.toggled_details().clone(),
             print_on_load: false,

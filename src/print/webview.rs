@@ -338,17 +338,13 @@ fn pdf(
             .cast::<ICoreWebView2Environment6>()?
             .CreatePrintSettings()?;
         settings.SetOrientation(COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT)?;
-        let (width, height) = if uses_letter() {
-            (8.5, 11.0)
-        } else {
-            (210.0 / 25.4, 297.0 / 25.4)
-        };
+        let (width, height) = super::paper_inches();
         settings.SetPageWidth(width)?;
         settings.SetPageHeight(height)?;
         settings.SetMarginTop(16.0 / 25.4)?;
         settings.SetMarginBottom(16.0 / 25.4)?;
-        settings.SetMarginLeft(15.0 / 25.4)?;
-        settings.SetMarginRight(15.0 / 25.4)?;
+        settings.SetMarginLeft(super::SIDE_MARGIN_MM / 25.4)?;
+        settings.SetMarginRight(super::SIDE_MARGIN_MM / 25.4)?;
         settings.SetShouldPrintBackgrounds(true)?;
         settings.SetShouldPrintHeaderAndFooter(false)?;
         settings
@@ -372,15 +368,6 @@ fn pdf(
         Ok(false) => Err(Error::Failed("the PDF could not be written".to_owned())),
         Err(error) => Err(error.into()),
     }
-}
-
-/// The reader's region measures in inches (the US and a few others), so
-/// their paper is Letter.
-fn uses_letter() -> bool {
-    use windows::Win32::Globalization::{GetLocaleInfoEx, LOCALE_IMEASURE};
-    let mut buffer = [0u16; 4];
-    let len = unsafe { GetLocaleInfoEx(PCWSTR::null(), LOCALE_IMEASURE, Some(&mut buffer)) };
-    len > 0 && buffer[0] == u16::from(b'1')
 }
 
 /// The window the view lives in: hidden for a PDF, for the printer shown
@@ -507,6 +494,7 @@ mod tests {
             body_font: None,
             mono_font: None,
             text_px: 16.0,
+            column_px: crate::style::DEFAULT_CONTENT_WIDTH,
             mark_bg: [0xff, 0xf1, 0x76],
             toggled_details: Default::default(),
             print_on_load: false,

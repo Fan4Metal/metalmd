@@ -127,6 +127,11 @@ impl ViewState {
         &self.details
     }
 
+    /// The width of the text column, in points, as last laid out.
+    pub fn column_width(&self) -> Option<f32> {
+        (self.measured_width > 0.0).then_some(self.measured_width)
+    }
+
     /// What of the document is selected, in document order.
     pub fn selection(&self) -> &[Selected] {
         &self.selected

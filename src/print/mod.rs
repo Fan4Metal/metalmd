@@ -96,6 +96,43 @@ fn in_browser(request: &Request) -> Result<Outcome, String> {
     Ok(Outcome::InBrowser)
 }
 
+/// The reader's region measures in inches (the US and a few others), so
+/// their paper is Letter, else A4.
+fn letter_paper() -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Globalization::{GetLocaleInfoEx, LOCALE_IMEASURE};
+        let mut buffer = [0u16; 4];
+        let len = unsafe {
+            GetLocaleInfoEx(
+                windows::core::PCWSTR::null(),
+                LOCALE_IMEASURE,
+                Some(&mut buffer),
+            )
+        };
+        len > 0 && buffer[0] == u16::from(b'1')
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+/// The paper's size in inches, portrait.
+fn paper_inches() -> (f64, f64) {
+    if letter_paper() {
+        (8.5, 11.0)
+    } else {
+        (210.0 / 25.4, 297.0 / 25.4)
+    }
+}
+
+/// The side margins of the page, in millimetres.
+const SIDE_MARGIN_MM: f64 = 15.0;
+
+/// The width of the text on paper, in CSS pixels (96 to the inch).
+fn paper_text_px() -> f32 {
+    ((paper_inches().0 - 2.0 * SIDE_MARGIN_MM / 25.4) * 96.0) as f32
+}
+
 /// The app's folder for pages to print, in the temporary folder.
 fn temp_dir() -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join("MetalMD");

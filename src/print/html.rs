@@ -26,6 +26,10 @@ pub struct PageOptions {
     pub mono_font: Option<String>,
     /// The body text size in CSS pixels.
     pub text_px: f32,
+    /// The width of the viewer's text column in CSS pixels: the page is
+    /// zoomed so that a line on paper holds what it holds in the window
+    /// (`zoom`).
+    pub column_px: f32,
     /// The highlight colour of the light theme.
     pub mark_bg: [u8; 3],
     /// `<details>` the reader opened or closed (`ViewState::toggled_details`).
@@ -145,6 +149,7 @@ impl<'d> Writer<'d> {
                 .replace("$BODY_FONT", &body_font)
                 .replace("$MONO_FONT", &mono_font)
                 .replace("$TEXT_PX", &format!("{:.1}", o.text_px))
+                .replace("$ZOOM", &format!("{:.3}", zoom(o.column_px)))
                 .replace("$MARK", &format!("#{r:02x}{g:02x}{b:02x}"))
                 .replace("$TEXT", TEXT)
                 .replace("$MUTED", MUTED)
@@ -628,11 +633,25 @@ fn escape(text: &str) -> String {
     out
 }
 
-/// The style sheet; `$NAME`s are filled in by `Writer::head`.
+/// The page's scale for a text column of `column_px` in the window: a line
+/// on paper holds as much as there, but the print is never larger than its
+/// own size, nor so small that it cannot be read (a column as wide as a
+/// large window).
+fn zoom(column_px: f32) -> f32 {
+    let zoom = super::paper_text_px() / column_px;
+    if zoom.is_finite() {
+        zoom.clamp(0.6, 1.0)
+    } else {
+        1.0
+    }
+}
+
+/// The style sheet; `$NAME`s are filled in by `Writer::head`. The side
+/// margins are those of `super::paper_text_px` and `webview::pdf`.
 const STYLE: &str = r#"@page { margin: 16mm 15mm; }
 html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body {
-  margin: 0; color: $TEXT; background: #fff;
+  margin: 0; color: $TEXT; background: #fff; zoom: $ZOOM;
   font-family: $BODY_FONT, "Segoe UI Emoji", "Segoe UI Symbol";
   font-size: $TEXT_PXpx; line-height: 1.5; overflow-wrap: break-word;
 }
@@ -716,6 +735,7 @@ mod tests {
             body_font: None,
             mono_font: Some("Fira Code".to_owned()),
             text_px: 16.0,
+            column_px: 880.0,
             mark_bg: [0xff, 0xee, 0x80],
             toggled_details: HashSet::new(),
             print_on_load: false,
@@ -736,6 +756,17 @@ mod tests {
         assert!(page.contains("font-size: 16.0px"));
         assert!(!page.contains('$'), "a placeholder left");
         assert!(page.ends_with("</body>\n</html>\n"));
+    }
+
+    #[test]
+    fn a_line_on_paper_holds_what_it_holds_in_the_window() {
+        let paper = super::super::paper_text_px();
+        assert!((zoom(paper) - 1.0).abs() < 1e-6);
+        assert!((zoom(paper * 1.25) - 0.8).abs() < 1e-6);
+        assert_eq!(zoom(paper / 2.0), 1.0);
+        assert_eq!(zoom(f32::INFINITY), 0.6);
+        assert_eq!(zoom(0.0), 1.0);
+        assert!(html("text").contains(&format!("zoom: {:.3};", paper / 880.0)));
     }
 
     #[test]
