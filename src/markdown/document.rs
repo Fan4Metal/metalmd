@@ -5,7 +5,9 @@
 //! thread and the module is testable without a window.
 
 use super::html::{self, Token};
-use super::preprocess::{self, BLOCK_ID_ANCHOR_CLASS, EMBED_SIZE_TITLE_PREFIX, Rewrite};
+use super::preprocess::{
+    self, BLOCK_ID_ANCHOR_CLASS, EMBED_SIZE_TITLE_PREFIX, Rewrite, is_embed_size,
+};
 use super::source::{InlineTrack, Sources, Tracker};
 use comrak::nodes::{AlertType, ListType, Node, NodeValue, TableAlignment};
 use comrak::{Anchorizer, Arena, parse_document};
@@ -1234,11 +1236,20 @@ impl InlineCtx {
                 let src = link.url.clone();
                 let title = link.title.clone();
                 drop(data);
-                let alt = collect_text(node);
-                let (width, height) = title
-                    .strip_prefix(EMBED_SIZE_TITLE_PREFIX)
-                    .map(parse_embed_size)
-                    .unwrap_or((None, None));
+                let mut alt = collect_text(node);
+                let (width, height) = match title.strip_prefix(EMBED_SIZE_TITLE_PREFIX) {
+                    Some(size) => parse_embed_size(size),
+                    // Obsidian sizes an ordinary image in its alt text:
+                    // `![alt|300x200](src)`, `![alt|300](src)`.
+                    None => match alt.rsplit_once('|') {
+                        Some((text, size)) if is_embed_size(size) => {
+                            let size = parse_embed_size(size.trim());
+                            alt.truncate(text.trim_end().len());
+                            size
+                        }
+                        _ => (None, None),
+                    },
+                };
                 let image = ImageRef {
                     src,
                     alt,
@@ -1655,6 +1666,45 @@ mod tests {
         assert_eq!(image.src, "diagram.png");
         assert_eq!(image.alt, "diagram.png");
         assert_eq!((image.width, image.height), (Some(300.0), Some(200.0)));
+    }
+
+    #[test]
+    fn sizes_in_alt_text_size_ordinary_images() {
+        let image = |source: &str| {
+            let doc = Document::parse(source);
+            let Some(Block::Paragraph { inlines, .. }) = doc.blocks.first() else {
+                panic!("{:?}", doc.blocks);
+            };
+            let Inline::Image(image) = &inlines[0] else {
+                panic!("{inlines:?}");
+            };
+            image.clone()
+        };
+        let sized = image(
+            "![Cover|160](../img/cover.jpg)
+",
+        );
+        assert_eq!(sized.alt, "Cover");
+        assert_eq!((sized.width, sized.height), (Some(160.0), None));
+        let both = image(
+            "![Still | 284x200](still.jpg)
+",
+        );
+        assert_eq!(both.alt, "Still");
+        assert_eq!((both.width, both.height), (Some(284.0), Some(200.0)));
+        let bare = image(
+            "![|120](a.png)
+",
+        );
+        assert_eq!(bare.alt, "");
+        assert_eq!(bare.width, Some(120.0));
+        // A `|` followed by text is part of the alt.
+        let text = image(
+            "![a|b](a.png)
+",
+        );
+        assert_eq!(text.alt, "a|b");
+        assert_eq!((text.width, text.height), (None, None));
     }
 
     #[test]

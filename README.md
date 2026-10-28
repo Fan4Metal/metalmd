@@ -25,7 +25,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 
 - **Fast**: the document appears about 0.2 s after start-up, for a 27 KB note as for a 5 MB log (see [Start-up speed](#start-up-speed)).
 - **GitHub-flavoured Markdown**: tables, task lists, strikethrough, autolinks, footnotes, `> [!NOTE]` alerts and front matter, through [comrak](https://github.com/kivikakk/comrak).
-- **Obsidian and Markpad syntax**: `[[Note#Heading|alias]]` wikilinks, `![[image.png|300x200]]` embeds, `^block-id` anchors, `==highlight==`, `++insert++`, `^[inline footnotes]` and definition lists. A single newline is a line break (see [Supported Markdown](#supported-markdown)).
+- **Obsidian and Markpad syntax**: `[[Note#Heading|alias]]` wikilinks, `![[image.png|300x200]]` embeds, `![alt|300x200](image.png)` sizes, `^block-id` anchors, `==highlight==`, `++insert++`, `^[inline footnotes]` and definition lists. A single newline is a line break (see [Supported Markdown](#supported-markdown)).
 - **Code highlighting** for about 200 languages, in colours that follow the light or dark theme.
 - **Formulas**: `$…$` and `$$…$$` are typeset as KaTeX does it, by [RaTeX](https://github.com/erweixin/RaTeX), a port of KaTeX to Rust.
 - **Colour emoji**, drawn with the system emoji font (Segoe UI Emoji).
@@ -55,7 +55,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 |---|---|
 | CommonMark | `**bold**`, `*italic*`, `` `code` ``, headings, lists, quotes, rules, links, images |
 | GitHub extensions | tables, `- [x]` task lists, `~~strikethrough~~`, bare URLs, `[^1]` footnotes, `> [!NOTE]` alerts |
-| Obsidian | `[[Note#Heading\|alias]]` wikilinks, `![[image.png\|300x200]]` embeds, `^block-id` anchors |
+| Obsidian | `[[Note#Heading\|alias]]` wikilinks, `![[image.png\|300x200]]` embeds, `![alt\|300x200](image.png)` sizes, `^block-id` anchors |
 | Other extensions | `==highlight==`, `++insert++`, `^[inline footnote]`, definition lists, YAML front matter |
 | Math | `$E = mc^2$` inline, `$$ … $$` on its own lines, LaTeX as [KaTeX](https://katex.org/docs/supported) supports it |
 | Diagrams | ```` ```mermaid ```` blocks: the diagram types of [mermaid-svg](https://github.com/xmiksay/mermaid) |

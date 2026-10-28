@@ -593,6 +593,13 @@ fn replace_outside<'a>(
     })
 }
 
+/// Whether `size` is an embed's size as written after the `|`: `300` or
+/// `300x200`, spaces around it allowed.
+pub fn is_embed_size(size: &str) -> bool {
+    let size = size.trim();
+    !size.is_empty() && size.chars().all(|c| c.is_ascii_digit() || c == 'x')
+}
+
 /// `![[path]]`, `![[path|300]]`, `![[path|300x200]]` → a Markdown image whose
 /// title carries the requested size.
 #[cfg(test)]
@@ -612,9 +619,10 @@ fn internal_embeds<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a,
         if path.is_empty() {
             return caps[0].to_owned();
         }
-        let size = parts.next().map(str::trim).filter(|size| {
-            !size.is_empty() && size.chars().all(|c| c.is_ascii_digit() || c == 'x')
-        });
+        let size = parts
+            .next()
+            .map(str::trim)
+            .filter(|size| is_embed_size(size));
         let src = encode_embed_destination(path);
         let alt = escape_markdown_text(path);
         match size {
