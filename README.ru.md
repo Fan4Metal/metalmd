@@ -57,7 +57,7 @@ MetalMD показывает Markdown-документ примерно чере
 | Расширения GitHub | таблицы, списки задач `- [x]`, `~~зачёркивание~~`, голые URL, сноски `[^1]`, выноски `> [!NOTE]` |
 | Obsidian | вики-ссылки `[[Заметка#Заголовок\|текст]]`, вставки `![[картинка.png\|300x200]]`, размеры `![текст\|300x200](картинка.png)`, якоря `^block-id` |
 | Другие расширения | `==выделение==`, `++вставка++`, `^[встроенная сноска]`, списки определений, YAML front matter |
-| Формулы | `$E = mc^2$` в строке, `$$ … $$` отдельным блоком, LaTeX в объёме [KaTeX](https://katex.org/docs/supported) |
+| Формулы | `$E = mc^2$` или ``$`E = mc^2`$`` в строке, `$$ … $$` отдельным блоком или блок ```` ```math ````, LaTeX в объёме [KaTeX](https://katex.org/docs/supported) |
 | Диаграммы | блоки ```` ```mermaid ````: виды диаграмм [mermaid-svg](https://github.com/xmiksay/mermaid) |
 | Блоки кода | подсветка через [syntect](https://github.com/trishume/syntect) и грамматики [two-face](https://github.com/CosmicHorrorDev/two-face) |
 | Картинки | PNG, JPEG, GIF, WebP, SVG, BMP и ICO, локальные и по http(s); анимированные GIF, WebP и APNG проигрываются; у SVG-значков виден текст |

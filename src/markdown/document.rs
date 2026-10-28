@@ -513,6 +513,14 @@ impl Builder {
                     .unwrap_or("")
                     .to_owned();
                 let code = code_block.literal.clone();
+                // GitHub's display math: a fence whose language is `math`.
+                if lang.eq_ignore_ascii_case("math") {
+                    let tex = code.trim_end_matches(['\n', '\r']).to_owned();
+                    let id = self.alloc_id();
+                    self.add_search(id, &tex);
+                    out.push(Block::Math { id, tex });
+                    return;
+                }
                 self.push_code(lang, code, out);
             }
             NodeValue::HtmlBlock(html_block) => {
@@ -1952,6 +1960,23 @@ mod tests {
             .collect();
         assert_eq!(footnotes, vec!["1", "2"]);
         assert!(doc.anchors.contains_key("fn-n"));
+    }
+
+    #[test]
+    fn github_math_syntax_is_math() {
+        let doc = Document::parse("Inline $`a^2`$ math.\n\n```math\nE = mc^2\n```\n");
+        let rich = first_rich(&doc.blocks[0]);
+        let span = rich
+            .spans
+            .iter()
+            .find(|span| span.style.has(Style::MATH))
+            .expect("a formula span");
+        assert_eq!(&rich.text[span.range.clone()], "a^2");
+        assert!(
+            matches!(&doc.blocks[1], Block::Math { tex, .. } if tex == "E = mc^2"),
+            "{:?}",
+            doc.blocks[1]
+        );
     }
 
     #[test]

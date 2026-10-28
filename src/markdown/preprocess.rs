@@ -75,7 +75,8 @@ pub fn before_rewrites(rewrites: &[Rewrite], at: usize, end: bool) -> usize {
 /// footnotes]`, definition lists, and single newlines as line breaks.
 /// `~sub~`, `^sup^` and `||spoiler||` stay off because they misread ordinary
 /// GFM text (`~x~` is strikethrough, `a^2 + b^2` is prose, `||` is an empty
-/// table cell). Alerts, dollar math and front matter are parsed by comrak.
+/// table cell). Alerts, dollar and code math and front matter are parsed by
+/// comrak.
 pub fn markdown_options<'a>() -> Options<'a> {
     let mut options = Options::default();
     options.extension.strikethrough = true;
@@ -89,6 +90,8 @@ pub fn markdown_options<'a>() -> Options<'a> {
     options.extension.description_lists = true;
     options.extension.alerts = true;
     options.extension.math_dollars = true;
+    // GitHub's inline math, $`x^2`$.
+    options.extension.math_code = true;
     options.extension.front_matter_delimiter = Some("---".to_owned());
     options.extension.header_id_prefix = Some(String::new());
     options.render.hardbreaks = true;
