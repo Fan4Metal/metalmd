@@ -852,6 +852,10 @@ fn comments<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a, str> {
             open = Some(at);
             continue;
         };
+        // `a %%note%% b` reads `a b`, not with two spaces.
+        if content[..start].ends_with(' ') && content[from..].starts_with(' ') {
+            from += 1;
+        }
         let line_ends: String = content[start..from]
             .chars()
             .filter(|&c| c == '\n' || c == '\r')
@@ -904,7 +908,8 @@ mod tests {
     #[test]
     fn comments_are_taken_out_keeping_their_line_ends() {
         let strip = |text: &str| comments(text, &mut Vec::new()).into_owned();
-        assert_eq!(strip("a %%hidden%% b\n"), "a  b\n");
+        assert_eq!(strip("a %%hidden%% b\n"), "a b\n");
+        assert_eq!(strip("a %%hidden%%, b\n"), "a , b\n");
         assert_eq!(strip("a\n%%\nline\r\nline\n%%\nb\n"), "a\n\n\r\n\n\nb\n");
         assert_eq!(strip("100%% sure\n"), "100%% sure\n");
         assert_eq!(strip("`%%` and %%gone%%.\n"), "`%%` and .\n");
