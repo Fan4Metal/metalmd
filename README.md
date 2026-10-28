@@ -55,7 +55,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 |---|---|
 | CommonMark | `**bold**`, `*italic*`, `` `code` ``, headings, lists, quotes, rules, links, images |
 | GitHub extensions | tables, `- [x]` task lists, `~~strikethrough~~`, bare URLs, `[^1]` footnotes, `> [!NOTE]` alerts |
-| Obsidian | `[[Note#Heading\|alias]]` wikilinks, `![[image.png\|300x200]]` embeds, `![alt\|300x200](image.png)` sizes, `^block-id` anchors, `%%comments%%` hidden |
+| Obsidian | `[[Note#Heading\|alias]]` wikilinks, `![[image.png\|300x200]]` embeds, `![alt\|300x200](image.png)` sizes, `^block-id` anchors, `%%comments%%` hidden, `> [!info]` callouts of every type in the colour of the nearest GitHub alert |
 | Other extensions | `==highlight==`, `++insert++`, `^[inline footnote]`, definition lists, YAML front matter |
 | Math | `$E = mc^2$` or ``$`E = mc^2`$`` inline, `$$ … $$` on its own lines or a ```` ```math ```` block, LaTeX as [KaTeX](https://katex.org/docs/supported) supports it |
 | Diagrams | ```` ```mermaid ```` blocks: the diagram types of [mermaid-svg](https://github.com/xmiksay/mermaid) |
@@ -66,7 +66,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 **Not supported**:
 
 - video, audio and YouTube previews: they are not shown;
-- Markpad's extra alert types (`[!TODO]` and others), foldable alerts;
+- folding callouts: `> [!NOTE]-` is shown open;
 - `data:` images;
 - HTML beyond the tags above;
 - flag emoji in colour: Segoe UI Emoji has no flags, so 🇷🇺 shows as the letters RU, as in browsers on Windows.

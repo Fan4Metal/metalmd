@@ -532,6 +532,15 @@ impl Builder {
             }
             NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => {
                 drop(data);
+                if let Some((kind, title)) = take_callout(node) {
+                    let blocks = self.children_blocks(node);
+                    out.push(Block::Alert {
+                        kind,
+                        title,
+                        blocks,
+                    });
+                    return;
+                }
                 let blocks = self.children_blocks(node);
                 out.push(Block::Quote(blocks));
             }
@@ -543,10 +552,17 @@ impl Builder {
                     AlertType::Warning => AlertKind::Warning,
                     AlertType::Caution => AlertKind::Caution,
                 };
+                // Obsidian's fold mark, `[!NOTE]-` or `[!NOTE]+`: the
+                // callout is shown open.
                 let title = alert
                     .title
-                    .clone()
-                    .unwrap_or_else(|| alert.alert_type.default_title().to_owned());
+                    .as_deref()
+                    .map(|title| title.strip_prefix(['-', '+']).unwrap_or(title).trim())
+                    .filter(|title| !title.is_empty())
+                    .map_or_else(
+                        || alert.alert_type.default_title().to_owned(),
+                        str::to_owned,
+                    );
                 drop(data);
                 let blocks = self.children_blocks(node);
                 out.push(Block::Alert {
@@ -1464,6 +1480,76 @@ fn lone_display_math<'a>(node: Node<'a>) -> Option<String> {
 
 /// The text a heading is anchorized from: the literals of its inline
 /// children, with emphasis and link markup dropped. Matches Markpad.
+/// An Obsidian callout that comrak's alerts do not take: a quote whose
+/// first line is `[!type]`, `[!type]-` or `[!type]+`, then an optional
+/// title. That line is taken out of the quote, and the callout comes back
+/// as the GitHub alert nearest in colour, titled with its type unless it
+/// has a title of its own. A fold mark is ignored: the callout is open.
+fn take_callout<'a>(quote: Node<'a>) -> Option<(AlertKind, String)> {
+    let paragraph = quote.first_child()?;
+    if !matches!(paragraph.data().value, NodeValue::Paragraph) {
+        return None;
+    }
+    let mut line = Vec::new();
+    let mut text = String::new();
+    for inline in paragraph.children() {
+        let end = matches!(
+            inline.data().value,
+            NodeValue::SoftBreak | NodeValue::LineBreak
+        );
+        line.push(inline);
+        if end {
+            break;
+        }
+        text.push_str(&collect_text(inline));
+    }
+    let rest = text.strip_prefix("[!")?;
+    let (kind, rest) = rest.split_once(']')?;
+    if kind.is_empty()
+        || !kind
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    let rest = rest.strip_prefix(['-', '+']).unwrap_or(rest);
+    // `[!info]text` is not a callout: the title is set off by a space.
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let title = match rest.trim() {
+        "" => {
+            let mut chars = kind.chars();
+            let first = chars.next().map(|c| c.to_ascii_uppercase());
+            first
+                .into_iter()
+                .chain(chars.map(|c| c.to_ascii_lowercase()))
+                .collect()
+        }
+        title => title.to_owned(),
+    };
+    for inline in line {
+        inline.detach();
+    }
+    Some((callout_kind(kind), title))
+}
+
+/// The GitHub alert whose colour is nearest an Obsidian callout type's.
+fn callout_kind(kind: &str) -> AlertKind {
+    match kind.to_ascii_lowercase().as_str() {
+        "abstract" | "summary" | "tldr" | "tip" | "hint" | "success" | "check" | "done" => {
+            AlertKind::Tip
+        }
+        "important" | "example" => AlertKind::Important,
+        "warning" | "attention" | "question" | "help" | "faq" => AlertKind::Warning,
+        "caution" | "failure" | "fail" | "missing" | "danger" | "error" | "bug" => {
+            AlertKind::Caution
+        }
+        // note, info, todo, quote, cite, and types of the reader's own.
+        _ => AlertKind::Note,
+    }
+}
+
 fn collect_text<'a>(node: Node<'a>) -> String {
     let mut text = String::new();
     for descendant in node.descendants() {
@@ -1960,6 +2046,62 @@ mod tests {
             .collect();
         assert_eq!(footnotes, vec!["1", "2"]);
         assert!(doc.anchors.contains_key("fn-n"));
+    }
+
+    #[test]
+    fn obsidian_callouts_are_alerts() {
+        let alert = |source: &str| {
+            let doc = Document::parse(source);
+            match &doc.blocks[0] {
+                Block::Alert {
+                    kind,
+                    title,
+                    blocks,
+                } => (*kind, title.clone(), plain_text_of(blocks)),
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(
+            alert("> [!info] Custom\n> body\n"),
+            (AlertKind::Note, "Custom".to_owned(), "body".to_owned())
+        );
+        assert_eq!(
+            alert("> [!BUG]\n> body\n"),
+            (AlertKind::Caution, "Bug".to_owned(), "body".to_owned())
+        );
+        assert_eq!(
+            alert("> [!faq]- Why *so*?\n> body\n"),
+            (AlertKind::Warning, "Why so?".to_owned(), "body".to_owned())
+        );
+        assert_eq!(
+            alert(">[!example]+\n").0,
+            AlertKind::Important,
+            "a callout without a body or the space after `>`"
+        );
+        assert_eq!(
+            alert("> [!NOTE]- folded\n> body\n"),
+            (AlertKind::Note, "folded".to_owned(), "body".to_owned())
+        );
+        assert_eq!(alert("> [!TIP]-\n> body\n").1, "Tip");
+        for quote in [
+            "> [!info]text\n",
+            "> [!]\n",
+            "> [!a b]\n",
+            "> text\n> [!info]\n",
+        ] {
+            let doc = Document::parse(quote);
+            assert!(matches!(doc.blocks[0], Block::Quote(_)), "{quote:?}");
+        }
+    }
+
+    fn plain_text_of(blocks: &[Block]) -> String {
+        blocks
+            .iter()
+            .map(|block| match block {
+                Block::Paragraph { inlines, .. } => plain_text(inlines),
+                other => panic!("{other:?}"),
+            })
+            .collect()
     }
 
     #[test]
