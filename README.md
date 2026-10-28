@@ -31,7 +31,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 - **Colour emoji**, drawn with the system emoji font (Segoe UI Emoji).
 - **Pictures on their own**: a click on an image or a diagram shows it over the window, fitted to it; the wheel zooms (diagrams are drawn again, sharp at any size), a drag moves it, a double click switches between 100 % and fitted.
 - **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
-- **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<details>` that opens and closes with a click on its summary, and other tags common in READMEs.
+- **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<table>` grids of images and text, `<details>` that opens and closes with a click on its summary, and other tags common in READMEs.
 - **Fonts and text size**: the Aa button opens a panel where the text font, the code font and the text size are chosen from the fonts installed in the system, the width of the text column (up to the whole window), and the colour of highlighted text (`==…==`) from six or any other, separately for the light and the dark theme. Changes apply at once. Variable fonts get their bold and italic from their axes, and a family without italic is slanted.
 - **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
 - **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window. A tab dragged out of the window gets a window of its own, a tab dragged into another window joins it, and dragging along the bar rearranges them.
@@ -61,7 +61,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 | Diagrams | ```` ```mermaid ```` blocks: the diagram types of [mermaid-svg](https://github.com/xmiksay/mermaid) |
 | Code blocks | highlighted with [syntect](https://github.com/trishume/syntect) and the grammars of [two-face](https://github.com/CosmicHorrorDev/two-face) |
 | Images | PNG, JPEG, GIF, WebP, SVG, BMP and ICO, local or over http(s); animated GIF, WebP and APNG play; SVG badges keep their text |
-| HTML | `<img>`, `<a>`, `<br>`, `<p align="center">`, `<b>`, `<i>`, `<kbd>`, `<sub>`, `<sup>`, `<mark>`, `<details>` |
+| HTML | `<img>`, `<a>`, `<br>`, `<p align="center">`, `<b>`, `<i>`, `<kbd>`, `<sub>`, `<sup>`, `<mark>`, `<details>`, `<table>` (cells hold text, images, and Markdown paragraphs and headings) |
 
 **Not supported**:
 

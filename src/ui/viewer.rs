@@ -1042,7 +1042,12 @@ fn draw_table(ui: &mut Ui, table: &Table, rc: &mut RenderCtx<'_>, salt: u64) {
         .header
         .len()
         .max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
-    let rows: Vec<&Vec<Vec<Inline>>> = std::iter::once(&table.header)
+    // An HTML table may have no header; its first row is then striped as
+    // the first under a header would be.
+    let headless = table.header.is_empty();
+    let rows: Vec<&Vec<Vec<Inline>>> = (!headless)
+        .then_some(&table.header)
+        .into_iter()
         .chain(table.rows.iter())
         .collect();
     let mut min = vec![0.0f32; columns];
@@ -1077,7 +1082,8 @@ fn draw_table(ui: &mut Ui, table: &Table, rc: &mut RenderCtx<'_>, salt: u64) {
                             ui.add_space(ROW_GAP);
                         }
                         let top = ui.cursor().min;
-                        let background = (r % 2 == 1).then(|| ui.painter().add(egui::Shape::Noop));
+                        let striped = (r + usize::from(headless)) % 2 == 1;
+                        let background = striped.then(|| ui.painter().add(egui::Shape::Noop));
                         let cells = r * columns..(r + 1) * columns;
                         let row_height = previous
                             .get(cells.clone())

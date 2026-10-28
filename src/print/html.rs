@@ -247,11 +247,16 @@ impl<'d> Writer<'d> {
                 items,
             } => self.list(*ordered, *start, *tight, items, &id_attr),
             Block::Table(table) => {
-                let _ = writeln!(self.out, "<table{id_attr}>\n<thead>\n<tr>");
-                for (column, cell) in table.header.iter().enumerate() {
-                    self.cell("th", table.aligns.get(column).copied(), cell);
+                let _ = writeln!(self.out, "<table{id_attr}>");
+                // An HTML table may have no header.
+                if !table.header.is_empty() {
+                    self.out.push_str("<thead>\n<tr>");
+                    for (column, cell) in table.header.iter().enumerate() {
+                        self.cell("th", table.aligns.get(column).copied(), cell);
+                    }
+                    self.out.push_str("</tr>\n</thead>\n");
                 }
-                self.out.push_str("</tr>\n</thead>\n<tbody>\n");
+                self.out.push_str("<tbody>\n");
                 for row in &table.rows {
                     self.out.push_str("<tr>");
                     for (column, cell) in row.iter().enumerate() {

@@ -733,6 +733,16 @@ mod tests {
     }
 
     #[test]
+    fn markdown_in_html_table_cells_is_found() {
+        let source = "<table><tr><td>\n\nSome **bold** words\n\n</td></tr></table>\n";
+        assert_eq!(md(source, "bold", "words"), "**bold** words");
+        assert_eq!(
+            marked(source, "bold", "words"),
+            "<table><tr><td>\n\nSome ==**bold** words==\n\n</td></tr></table>\n"
+        );
+    }
+
+    #[test]
     fn places_after_a_comment_are_in_the_file() {
         let source = "Before %%a\nhidden note%% **bold** words\n";
         assert_eq!(md(source, "bold", "words"), "**bold** words");

@@ -297,10 +297,18 @@ impl Document {
             // (an HTML block with two paragraphs), so the index is the length
             // of the output, not the child's position.
             builder.top = blocks.len();
-            builder.block(child, &mut blocks);
             // Preprocessing keeps lines, so this is the file's line.
             let line = child.data().sourcepos.start.line;
+            builder.line = line;
+            builder.block(child, &mut blocks);
             lines.resize(blocks.len(), line);
+        }
+        builder.finish_html_table(&mut blocks);
+        lines.resize(blocks.len(), builder.line);
+        for (block, line) in std::mem::take(&mut builder.table_lines) {
+            if let Some(at) = lines.get_mut(block) {
+                *at = line;
+            }
         }
         let sources = builder.track.take().map(|tracker| {
             passes.extend(rewrites.into_iter().flatten());
@@ -383,6 +391,143 @@ const MAX_BLOCK_DEPTH: usize = 32;
 /// text, for the same reason.
 const MAX_INLINE_DEPTH: usize = 64;
 
+/// An HTML `<table>` being built. It can run over several blocks: an HTML
+/// block ends at a blank line, so rows set apart by one are blocks of their
+/// own, and so is Markdown set apart between `<td>` and `</td>`, which goes
+/// into the cell.
+struct HtmlTable {
+    /// The `Builder::depth` it was opened at: blocks at it go into the
+    /// table, and it is finished before its container is.
+    depth: usize,
+    /// The file's line it starts on, when opened at the top level.
+    line: usize,
+    /// Each row's cells, with whether a cell is a `<th>`. The last row is
+    /// being filled while `row_open`, its last cell while `cell_open`.
+    rows: Vec<Vec<(Vec<Inline>, bool)>>,
+    row_open: bool,
+    cell_open: bool,
+    /// Each column's alignment, from the first cell in it that names one.
+    aligns: Vec<Option<Align>>,
+    /// `<table>`s open inside a cell: their markup is left out and their
+    /// text goes into the cell.
+    nested: usize,
+    /// `<details>` open inside a cell: only their text is kept.
+    details: usize,
+    /// The text of its `<caption>`, shown above it, while `in_caption`.
+    caption: Vec<Inline>,
+    in_caption: bool,
+}
+
+impl HtmlTable {
+    fn start_row(&mut self) {
+        self.rows.push(Vec::new());
+        self.row_open = true;
+        self.cell_open = false;
+    }
+
+    fn end_row(&mut self) {
+        self.row_open = false;
+        self.cell_open = false;
+    }
+
+    fn start_cell(&mut self, header: bool, align: Option<Align>) {
+        if !self.row_open {
+            self.start_row();
+        }
+        let row = self.rows.last_mut().expect("a row was just started");
+        let column = row.len();
+        row.push((Vec::new(), header));
+        if self.aligns.len() <= column {
+            self.aligns.resize(column + 1, None);
+        }
+        if self.aligns[column].is_none() {
+            self.aligns[column] = align;
+        }
+        self.cell_open = true;
+    }
+
+    /// The cell being filled, a new one if none is: `align` is its
+    /// alignment when it names none, the one around the table.
+    fn cell(&mut self, align: Option<Align>) -> &mut Vec<Inline> {
+        if !self.cell_open {
+            self.start_cell(false, align);
+        }
+        let row = self.rows.last_mut().expect("a cell is open");
+        &mut row.last_mut().expect("a cell is open").0
+    }
+
+    /// The table's blocks: its caption, centred, and the table, whose first
+    /// row is its header if it is all `<th>`, and whose rows shorter than
+    /// the longest are filled with empty cells.
+    fn finish(self) -> Vec<Block> {
+        let mut blocks = Vec::new();
+        if !inlines_are_blank(&self.caption) {
+            blocks.push(Block::Paragraph {
+                inlines: self.caption,
+                align: Align::Center,
+            });
+        }
+        let mut rows: Vec<_> = self.rows.into_iter().filter(|r| !r.is_empty()).collect();
+        // Nothing in any cell (a table cut short by a list in its cell).
+        if rows.iter().flatten().all(|(cell, _)| cell.is_empty()) {
+            return blocks;
+        }
+        let Some(columns) = rows.iter().map(Vec::len).max() else {
+            return blocks;
+        };
+        let has_header = rows[0].iter().all(|(_, header)| *header);
+        let fill = |row: Vec<(Vec<Inline>, bool)>| {
+            let mut cells: Vec<Vec<Inline>> = row.into_iter().map(|(cell, _)| cell).collect();
+            cells.resize_with(columns, Vec::new);
+            cells
+        };
+        let header = if has_header {
+            fill(rows.remove(0))
+        } else {
+            Vec::new()
+        };
+        let mut aligns: Vec<Align> = self
+            .aligns
+            .into_iter()
+            .map(Option::unwrap_or_default)
+            .collect();
+        aligns.resize(columns, Align::Left);
+        blocks.push(Block::Table(Table {
+            aligns,
+            header,
+            rows: rows.into_iter().map(fill).collect(),
+        }));
+        blocks
+    }
+}
+
+/// Tags whose meaning is a part of a table.
+fn is_table_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th" | "caption" | "colgroup" | "col"
+    )
+}
+
+/// A table cell's alignment as written: `align` or a `text-align` style.
+fn html_cell_align(attrs: &str) -> Option<Align> {
+    let named = match html::attr(attrs, "align") {
+        Some(align) => align.into_owned(),
+        None => {
+            let style = html::attr(attrs, "style")?.to_ascii_lowercase();
+            let (_, rest) = style.split_once("text-align")?;
+            let value = rest.trim_start().strip_prefix(':')?;
+            value.split(';').next()?.to_owned()
+        }
+    };
+    match named.trim().to_ascii_lowercase().as_str() {
+        "center" => Some(Align::Center),
+        "right" => Some(Align::Right),
+        "left" => Some(Align::Left),
+        _ => None,
+    }
+}
+
 #[derive(Default)]
 struct Builder {
     anchorizer: Anchorizer,
@@ -404,6 +549,13 @@ struct Builder {
     base_style: Style,
     /// `<details>` built so far.
     details: u32,
+    /// The HTML table open, if any.
+    html_table: Option<HtmlTable>,
+    /// The file's line of the top-level block being built.
+    line: usize,
+    /// Top-level tables finished in a later block than they started in,
+    /// with the line they started on.
+    table_lines: Vec<(usize, usize)>,
     /// Places in the source, kept for `markdown::source` only.
     track: Option<Box<Tracker>>,
     /// The block being built, when places are kept.
@@ -450,13 +602,184 @@ impl Builder {
                 self.block(child, &mut out);
             }
         }
+        // A table left open ends with its container.
+        self.finish_html_table(&mut out);
         self.depth -= 1;
         out
+    }
+
+    /// Whether an HTML table is open at the depth being built.
+    fn in_html_table(&self) -> bool {
+        self.html_table
+            .as_ref()
+            .is_some_and(|table| table.depth == self.depth)
+    }
+
+    /// Pushes the HTML table open at this depth, if any, to `out`.
+    fn finish_html_table(&mut self, out: &mut Vec<Block>) {
+        if !self.in_html_table() {
+            return;
+        }
+        let Some(table) = self.html_table.take() else {
+            return;
+        };
+        let (depth, line) = (table.depth, table.line);
+        for block in table.finish() {
+            if depth == 0 && line != self.line {
+                self.table_lines.push((out.len(), line));
+            }
+            out.push(block);
+        }
+    }
+
+    /// The text gathered in `ctx`, from an HTML block inside a table, to
+    /// the cell or caption it is in.
+    fn html_cell_text(&mut self, ctx: &mut InlineCtx) {
+        let Some(mut inlines) = self.take_html_inlines(ctx) else {
+            return;
+        };
+        match self.html_table.as_mut() {
+            Some(table) if table.in_caption => table.caption.append(&mut inlines),
+            _ => self.add_to_html_table(inlines),
+        }
+    }
+
+    /// Takes `token` if it is a table's tag and opens a table or one is
+    /// open, telling whether it did.
+    fn html_table_tag(
+        &mut self,
+        ctx: &mut InlineCtx,
+        token: &Token<'_>,
+        out: &mut Vec<Block>,
+    ) -> bool {
+        // `<td/>` opens a cell as `<td>` does in a browser.
+        let (name, open, attrs) = match token {
+            Token::Open { name, attrs, .. } => (name.as_str(), true, *attrs),
+            Token::Close { name } => (name.as_str(), false, ""),
+            Token::Text(_) => return false,
+        };
+        if !is_table_tag(name) {
+            return false;
+        }
+        if !self.in_html_table() {
+            if !(open && name == "table") {
+                return false;
+            }
+            self.flush_html_paragraph(ctx, None, out);
+            self.html_table = Some(HtmlTable {
+                depth: self.depth,
+                line: self.line,
+                rows: Vec::new(),
+                row_open: false,
+                cell_open: false,
+                aligns: Vec::new(),
+                nested: 0,
+                details: 0,
+                caption: Vec::new(),
+                in_caption: false,
+            });
+            return true;
+        }
+        let table = self.html_table.as_mut().expect("a table is open");
+        if table.nested > 0 || open && name == "table" {
+            // A table inside a cell: its cells are words of the cell.
+            match (name, open) {
+                ("table", true) => table.nested += 1,
+                ("table", false) => table.nested -= 1,
+                ("td" | "th" | "tr", false) => ctx.push_text(" ", Style::NONE),
+                _ => {}
+            }
+            return true;
+        }
+        // What came before the tag is the cell's (or caption's) it ends.
+        self.html_cell_text(ctx);
+        ctx.html_close("th");
+        let around = self.html_align.last().map(|(_, align)| *align);
+        let table = self.html_table.as_mut().expect("a table is open");
+        match (name, open) {
+            ("table", false) => self.finish_html_table(out),
+            ("tr", true) => {
+                table.end_row();
+                table.start_row();
+            }
+            ("tr", false) => table.end_row(),
+            ("td" | "th", true) => {
+                table.start_cell(name == "th", html_cell_align(attrs).or(around));
+                if name == "th" {
+                    ctx.html_open("th", Style::STRONG);
+                }
+            }
+            ("td" | "th", false) => table.cell_open = false,
+            ("caption", open) => {
+                table.end_row();
+                table.in_caption = open;
+            }
+            // thead, tbody, tfoot, colgroup, col.
+            _ => {}
+        }
+        true
+    }
+
+    /// Adds `inlines` to the cell being filled, or to a new one. What a
+    /// cell already holds ends its line first, as a paragraph would.
+    fn add_to_html_table(&mut self, mut inlines: Vec<Inline>) {
+        if inlines_are_blank(&inlines) {
+            return;
+        }
+        let align = self.html_align.last().map(|(_, align)| *align);
+        let Some(table) = self.html_table.as_mut() else {
+            return;
+        };
+        let cell = table.cell(align);
+        match cell.last_mut() {
+            None => {}
+            Some(Inline::Text(rich)) => {
+                rich.text.push('\n');
+                if let Some(span) = rich.spans.last_mut() {
+                    span.range.end = rich.text.len();
+                }
+            }
+            Some(Inline::Image(_)) => {
+                let id = self.next_id;
+                self.next_id += 1;
+                cell.push(Inline::Text(Rich {
+                    id,
+                    text: "\n".to_owned(),
+                    spans: vec![Span {
+                        range: 0..1,
+                        style: Style::NONE,
+                        link: None,
+                    }],
+                    links: Vec::new(),
+                }));
+            }
+        }
+        cell.append(&mut inlines);
     }
 
     /// Builds `node` into `out`. At the top level `self.top` must equal the
     /// index the first pushed block will get.
     fn block<'a>(&mut self, node: Node<'a>, out: &mut Vec<Block>) {
+        if self.in_html_table() {
+            let value = &node.data().value;
+            let heading = matches!(value, NodeValue::Heading(_));
+            match value {
+                NodeValue::HtmlBlock(_) => {}
+                // Markdown between `<td>` and `</td>`: its text is the cell's.
+                NodeValue::Paragraph | NodeValue::Heading(_) => {
+                    let saved = self.base_style;
+                    if heading {
+                        self.base_style |= Style::STRONG;
+                    }
+                    let inlines = self.inlines(node);
+                    self.base_style = saved;
+                    self.add_to_html_table(inlines);
+                    return;
+                }
+                // Anything else ends the table, as it cannot go in a cell.
+                _ => self.finish_html_table(out),
+            }
+        }
         let data = node.data();
         if let Some(track) = &self.track {
             self.block_source = Some(track.range(&data.sourcepos));
@@ -731,6 +1054,9 @@ impl Builder {
         // The `Details` in `out` that a `<summary>` would name.
         let mut summary_of: Option<usize> = None;
         for token in html::tokenize(literal) {
+            if pre.is_none() && self.html_table_tag(&mut ctx, &token, out) {
+                continue;
+            }
             if let Some((lang, code)) = pre.as_mut() {
                 match &token {
                     Token::Close { name } if name == "pre" => {
@@ -756,7 +1082,7 @@ impl Builder {
                     name,
                     attrs,
                     self_closing: false,
-                } if name == "pre" => {
+                } if name == "pre" && !self.in_html_table() => {
                     self.flush_html_paragraph(&mut ctx, heading.take(), out);
                     pre = Some((html_code_language(attrs), String::new()));
                 }
@@ -780,7 +1106,17 @@ impl Builder {
                     if let Some(level) = html_heading_level(name) {
                         heading = Some(level);
                     }
-                    if name == "details" {
+                    // In a table cell, which holds only text, a heading is
+                    // bold and `<details>` only its text.
+                    let in_table = self.in_html_table();
+                    if in_table && html_heading_level(name).is_some() {
+                        ctx.html_open(name, Style::STRONG);
+                    }
+                    if name == "details"
+                        && let Some(table) = self.html_table.as_mut().filter(|_| in_table)
+                    {
+                        table.details += 1;
+                    } else if name == "details" {
                         out.push(Block::Details {
                             index: self.details,
                             open: html::attr(attrs, "open").is_some(),
@@ -794,7 +1130,7 @@ impl Builder {
                     }
                 }
                 Token::Close { name } if is_html_block_tag(name) => {
-                    if name == "dt" || name == "th" {
+                    if name == "dt" || name == "th" || html_heading_level(name).is_some() {
                         ctx.html_close(name);
                     }
                     if name == "summary"
@@ -805,8 +1141,20 @@ impl Builder {
                     }
                     self.flush_html_paragraph(&mut ctx, heading.take(), out);
                     if name == "details" {
-                        summary_of = None;
-                        out.push(Block::DetailsEnd);
+                        let inner = self
+                            .html_table
+                            .as_mut()
+                            .filter(|table| table.depth == self.depth && table.details > 0);
+                        match inner {
+                            Some(table) => table.details -= 1,
+                            None => {
+                                // The end of details around the table: it
+                                // ends inside them.
+                                self.finish_html_table(out);
+                                summary_of = None;
+                                out.push(Block::DetailsEnd);
+                            }
+                        }
                     }
                     if let Some(pos) = self.html_align.iter().rposition(|(n, _)| n == name) {
                         self.html_align.truncate(pos);
@@ -833,6 +1181,11 @@ impl Builder {
         heading: Option<u8>,
         out: &mut Vec<Block>,
     ) {
+        // Inside a table it is a line of the cell.
+        if self.in_html_table() {
+            self.html_cell_text(ctx);
+            return;
+        }
         let Some(inlines) = self.take_html_inlines(ctx) else {
             return;
         };
@@ -2046,6 +2399,118 @@ mod tests {
             .collect();
         assert_eq!(footnotes, vec!["1", "2"]);
         assert!(doc.anchors.contains_key("fn-n"));
+    }
+
+    fn html_table(doc: &Document, at: usize) -> (&Table, Vec<Vec<String>>) {
+        let Block::Table(table) = &doc.blocks[at] else {
+            panic!("{:?}", doc.blocks);
+        };
+        let texts = |row: &Vec<Vec<Inline>>| row.iter().map(|cell| plain_text(cell)).collect();
+        let rows = std::iter::once(&table.header)
+            .filter(|header| !header.is_empty())
+            .chain(&table.rows)
+            .map(texts)
+            .collect();
+        (table, rows)
+    }
+
+    #[test]
+    fn html_tables_are_tables() {
+        let doc = Document::parse(concat!(
+            "<table>\n",
+            "  <tr><th>Name</th><th align=\"right\">Size</th></tr>\n",
+            "  <tr><td>a <b>bold</b></td><td style=\"text-align: center\">1<br>2</td></tr>\n",
+            "  <tr><td>short</td></tr>\n",
+            "</table>\n",
+        ));
+        assert_eq!(doc.blocks.len(), 1, "{:?}", doc.blocks);
+        let (table, rows) = html_table(&doc, 0);
+        assert_eq!(
+            rows,
+            [["Name", "Size"], ["a bold", "1\n2"], ["short", ""]].map(|r| r.map(str::to_owned))
+        );
+        assert_eq!(table.aligns, [Align::Left, Align::Right]);
+        let Inline::Text(name) = &table.header[0][0] else {
+            panic!("{:?}", table.header);
+        };
+        assert!(name.spans.iter().all(|span| span.style.has(Style::STRONG)));
+        assert!(doc.search.iter().any(|s| s.text == "short" && s.block == 0));
+    }
+
+    #[test]
+    fn html_tables_hold_markdown_and_rows_set_apart() {
+        let doc = Document::parse(concat!(
+            "Before\n\n",
+            "<div align=\"center\">\n",
+            "<table>\n",
+            "<tr>\n",
+            "<td>\n\n",
+            "### Fast\n\n",
+            "**Bold** text\n\n",
+            "</td>\n",
+            "<td>\n\n",
+            "![logo](logo.png)\n\n",
+            "Caption\n\n",
+            "</td>\n",
+            "</tr>\n\n",
+            "<tr><td>x</td><td>y</td></tr>\n",
+            "</table>\n",
+            "</div>\n\n",
+            "After\n",
+        ));
+        assert_eq!(doc.blocks.len(), 3, "{:?}", doc.blocks);
+        let (table, rows) = html_table(&doc, 1);
+        assert_eq!(
+            rows,
+            [["Fast\nBold text", "\nCaption"], ["x", "y"]].map(|r| r.map(str::to_owned))
+        );
+        assert!(table.header.is_empty());
+        assert_eq!(table.aligns, [Align::Center, Align::Center]);
+        assert!(matches!(table.rows[0][1][0], Inline::Image(_)));
+        // The line of the HTML block it starts in, `<div …>`.
+        assert_eq!(doc.lines[1], 3, "the table's line is where it starts");
+        assert_eq!(plain_text_of(&doc.blocks[2..]), "After");
+    }
+
+    #[test]
+    fn html_tables_end_at_what_a_cell_cannot_hold() {
+        // A list in a cell: the table so far ends before it, and the tags
+        // after it are what they were without tables.
+        let doc = Document::parse("<table><tr><td>\n\n- item\n\n</td></tr></table>\n");
+        assert!(
+            matches!(doc.blocks[0], Block::List { .. }),
+            "{:?}",
+            doc.blocks
+        );
+        assert_eq!(doc.blocks.len(), 1, "{:?}", doc.blocks);
+        // Unclosed: it ends with the document, or with the item it is in.
+        let doc = Document::parse("<table><tr><td>a</td>\n");
+        assert_eq!(html_table(&doc, 0).1, [["a"]]);
+        let doc = Document::parse("- item\n\n  <table><tr><td>a</td>\n\n- next\n");
+        let Block::List { items, .. } = &doc.blocks[0] else {
+            panic!("{:?}", doc.blocks);
+        };
+        assert!(
+            matches!(items[0].blocks[1], Block::Table(_)),
+            "{:?}",
+            items[0]
+        );
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn html_tables_inside_cells_and_captions_are_text() {
+        let doc = Document::parse(concat!(
+            "<table><caption>Results</caption>\n",
+            "<tr><td><table><tr><td>in</td><td>ner</td></tr></table></td><td>b</td></tr>\n",
+            "</table>\n",
+        ));
+        assert!(
+            matches!(&doc.blocks[0], Block::Paragraph { align: Align::Center, inlines } if plain_text(inlines) == "Results"),
+            "{:?}",
+            doc.blocks
+        );
+        assert_eq!(html_table(&doc, 1).1, [["in ner", "b"]]);
     }
 
     #[test]
