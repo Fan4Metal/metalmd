@@ -830,16 +830,62 @@ pub fn preprocess(content: &str) -> Cow<'_, str> {
     preprocess_with_rewrites(content).0
 }
 
+/// Obsidian's comments, `%%hidden%%` within a line or over several, are
+/// taken out. Each leaves its line ends, so the lines after it keep their
+/// numbers. A `%%` in code does not count, and one left unclosed stays.
+fn comments<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a, str> {
+    if !content.contains("%%") {
+        return Cow::Borrowed(content);
+    }
+    let regions = code_region_ranges(content);
+    let mut out = String::with_capacity(content.len());
+    let mut copied = 0;
+    let mut open = None;
+    let mut from = 0;
+    while let Some(found) = content[from..].find("%%") {
+        let at = from + found;
+        from = at + 2;
+        if in_code_region(&regions, at) {
+            continue;
+        }
+        let Some(start) = open.take() else {
+            open = Some(at);
+            continue;
+        };
+        let line_ends: String = content[start..from]
+            .chars()
+            .filter(|&c| c == '\n' || c == '\r')
+            .collect();
+        out.push_str(&content[copied..start]);
+        out.push_str(&line_ends);
+        copied = from;
+        rewrites.push(Rewrite {
+            from: start..from,
+            len: line_ends.len(),
+        });
+    }
+    if rewrites.is_empty() {
+        return Cow::Borrowed(content);
+    }
+    out.push_str(&content[copied..]);
+    Cow::Owned(out)
+}
+
 /// [`preprocess`], also giving each pass's rewrites, first pass first.
-pub fn preprocess_with_rewrites(content: &str) -> (Cow<'_, str>, [Vec<Rewrite>; 4]) {
-    let mut passes: [Vec<Rewrite>; 4] = Default::default();
+pub fn preprocess_with_rewrites(content: &str) -> (Cow<'_, str>, [Vec<Rewrite>; 5]) {
+    let mut passes: [Vec<Rewrite>; 5] = Default::default();
     let [
+        comment_rewrites,
         autolink_rewrites,
         embed_rewrites,
         link_rewrites,
         id_rewrites,
     ] = &mut passes;
-    let autolinks = parenthesized_autolinks(content, autolink_rewrites);
+    let content = comments(content, comment_rewrites);
+    let autolinks = match parenthesized_autolinks(&content, autolink_rewrites) {
+        Cow::Borrowed(_) => content,
+        Cow::Owned(s) => Cow::Owned(s),
+    };
     let embeds = match internal_embeds(&autolinks, embed_rewrites) {
         Cow::Borrowed(_) => autolinks,
         Cow::Owned(s) => Cow::Owned(s),
@@ -854,6 +900,25 @@ pub fn preprocess_with_rewrites(content: &str) -> (Cow<'_, str>, [Vec<Rewrite>; 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comments_are_taken_out_keeping_their_line_ends() {
+        let strip = |text: &str| comments(text, &mut Vec::new()).into_owned();
+        assert_eq!(strip("a %%hidden%% b\n"), "a  b\n");
+        assert_eq!(strip("a\n%%\nline\r\nline\n%%\nb\n"), "a\n\n\r\n\n\nb\n");
+        assert_eq!(strip("100%% sure\n"), "100%% sure\n");
+        assert_eq!(strip("`%%` and %%gone%%.\n"), "`%%` and .\n");
+        assert_eq!(strip("```\n%%\n```\n%%x%%\n"), "```\n%%\n```\n\n");
+        let mut rewrites = Vec::new();
+        assert_eq!(comments("x%%a%%y", &mut rewrites), "xy");
+        assert_eq!(rewrites, vec![Rewrite { from: 1..6, len: 0 }]);
+    }
+
+    #[test]
+    fn comments_hide_the_syntax_inside_them() {
+        let out = preprocess("%%![[pic.png]] [[#Heading]]%%after\n");
+        assert_eq!(out, "after\n");
+    }
 
     #[test]
     fn embed_protection_survives_longer_backtick_runs_earlier_in_the_doc() {

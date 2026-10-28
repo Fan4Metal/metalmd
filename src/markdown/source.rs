@@ -733,6 +733,16 @@ mod tests {
     }
 
     #[test]
+    fn places_after_a_comment_are_in_the_file() {
+        let source = "Before %%a\nhidden note%% **bold** words\n";
+        assert_eq!(md(source, "bold", "words"), "**bold** words");
+        assert_eq!(
+            marked(source, "bold", "words"),
+            "Before %%a\nhidden note%% ==**bold** words==\n"
+        );
+    }
+
+    #[test]
     fn code_blocks_give_their_code() {
         let source = "Text\n\n```rust\nfn main() {}\n```\n";
         assert_eq!(md(source, "main", "{}"), "main() {}");
