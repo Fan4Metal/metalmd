@@ -533,6 +533,10 @@ impl<'d> Writer<'d> {
             path.to_path_buf()
         } else {
             match self.options.base_dir.as_deref() {
+                // Not there: where the document's Obsidian vault has it.
+                Some(base) if !base.join(path).exists() => {
+                    crate::vault::locate_now(base, &decoded).unwrap_or_else(|| base.join(path))
+                }
                 Some(base) => base.join(path),
                 None => return target.to_owned(),
             }
@@ -561,7 +565,7 @@ fn image_url(src: &str, base_dir: Option<&Path>) -> Option<String> {
     if src.starts_with("data:") {
         return Some(src.to_owned());
     }
-    let uri = crate::ui::viewer::image_uri(src, base_dir)?;
+    let uri = crate::ui::viewer::image_uri_now(src, base_dir)?;
     // A path the viewer reads as it is: for a browser it is a URL.
     match uri.strip_prefix("file://") {
         Some(path) => Some(format!("file://{}", encode_path(path))),

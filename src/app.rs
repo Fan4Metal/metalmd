@@ -1032,6 +1032,8 @@ impl App {
         {
             watcher.refresh(&tab.path);
         }
+        // Files may have moved in the vault since they were looked for.
+        crate::vault::forget();
         self.reload(current, index);
     }
 
@@ -1533,12 +1535,18 @@ impl App {
         let resolved = if candidate.is_absolute() {
             candidate.to_path_buf()
         } else if let Some(base) = base {
-            base.join(candidate)
+            let here = base.join(candidate);
+            if here.exists() {
+                here
+            } else {
+                // Obsidian finds a note anywhere in its vault by name.
+                crate::vault::locate_now(&base, &decoded).unwrap_or(here)
+            }
         } else {
             return;
         };
         let _ = ctx;
-        self.open_link_target(if is_markdown_path(&decoded) {
+        self.open_link_target(if is_markdown_path(&resolved.to_string_lossy()) {
             LinkTarget::Markdown(resolved, fragment)
         } else {
             LinkTarget::File(resolved)

@@ -1234,7 +1234,7 @@ fn image_width(ui: &Ui, image: &ImageRef, rc: &RenderCtx<'_>) -> f32 {
             .size()
             .x
     };
-    let Some(uri) = image_uri(&image.src, rc.base_dir) else {
+    let Some(uri) = image_source(ui.ctx(), &image.src, rc.base_dir).0 else {
         return alt_width();
     };
     let uri = super::animation::frame_uri(ui.ctx(), &uri).unwrap_or(uri);
@@ -2009,6 +2009,51 @@ fn draw_diagram(ui: &mut Ui, id: u32, source: &str, rc: &mut RenderCtx<'_>, salt
     });
 }
 
+/// The URI to draw an image source from: [`image_uri`], or, when that
+/// file could not be read and the source is a relative path, where the
+/// document's Obsidian vault has the file (`vault::locate`, which reads
+/// nothing while the file is where the source says). Also whether the
+/// vault is still being listed.
+fn image_source(ctx: &egui::Context, src: &str, base_dir: Option<&Path>) -> (Option<String>, bool) {
+    let Some(uri) = image_uri(src, base_dir) else {
+        return (None, false);
+    };
+    if !uri.starts_with("file:") || ctx.try_load_bytes(&uri).is_ok() {
+        return (Some(uri), false);
+    }
+    let (Some(base), Some(relative)) = (base_dir, relative_source(src)) else {
+        return (Some(uri), false);
+    };
+    match crate::vault::locate(base, &relative, ctx) {
+        crate::vault::Located::Found(path) => (Some(file_uri(&path)), false),
+        crate::vault::Located::Waiting => (Some(uri), true),
+        crate::vault::Located::Missing => (Some(uri), false),
+    }
+}
+
+/// [`image_uri`] for a page to print: a relative file that is not there
+/// is looked for in the vault at once.
+pub fn image_uri_now(src: &str, base_dir: Option<&Path>) -> Option<String> {
+    let uri = image_uri(src, base_dir)?;
+    if let (Some(base), Some(relative)) = (base_dir, relative_source(src))
+        && !base.join(&relative).exists()
+        && let Some(found) = crate::vault::locate_now(base, &relative)
+    {
+        return Some(file_uri(&found));
+    }
+    Some(uri)
+}
+
+/// The decoded path of a source relative to the document, if it is one.
+fn relative_source(src: &str) -> Option<String> {
+    let src = src.trim();
+    if src.is_empty() || src.contains("://") || src.starts_with("data:") {
+        return None;
+    }
+    let path = percent_decode(src.split(['?', '#']).next().unwrap_or(src));
+    (!path.is_empty() && !Path::new(&path).is_absolute()).then_some(path)
+}
+
 /// `file://` URI or http(s) URL for an image source written in a document.
 pub fn image_uri(src: &str, base_dir: Option<&Path>) -> Option<String> {
     let src = src.trim();
@@ -2083,7 +2128,10 @@ fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) -> Response
         }
         response
     };
-    let Some(source_uri) = image_uri(&image.src, rc.base_dir) else {
+    let (source_uri, waiting) = image_source(ui.ctx(), &image.src, rc.base_dir);
+    // Measured again once the vault is listed.
+    rc.pending |= waiting;
+    let Some(source_uri) = source_uri else {
         return fallback(ui, rc);
     };
     let uri = super::animation::frame_uri(ui.ctx(), &source_uri).unwrap_or(source_uri.clone());

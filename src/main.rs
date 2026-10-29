@@ -27,6 +27,7 @@ mod single_instance;
 mod style;
 mod ui;
 mod update;
+mod vault;
 mod watcher;
 #[cfg(windows)]
 mod win;
