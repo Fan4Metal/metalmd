@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::document::{Block, Document, Inline, SearchText};
+use super::document::{Block, Document, Inline, Scripts, SearchText};
 use super::preprocess::percent_decode;
 
 /// Embeds within embeds go this deep.
@@ -42,6 +42,7 @@ fn fill_in(doc: &mut Document, path: &Path, chain: &mut Vec<PathBuf>, budget: &m
     let mut next = Next {
         ids: doc.ids,
         folds: doc.folds,
+        scripts: doc.scripts,
         search: Vec::new(),
         images: Vec::new(),
     };
@@ -52,6 +53,7 @@ fn fill_in(doc: &mut Document, path: &Path, chain: &mut Vec<PathBuf>, budget: &m
     }
     doc.ids = next.ids;
     doc.folds = next.folds;
+    doc.scripts = next.scripts;
     doc.search.extend(next.search);
     // In document order: the embedded text where its block is.
     doc.search.sort_by_key(|s| s.block);
@@ -66,6 +68,8 @@ fn fill_in(doc: &mut Document, path: &Path, chain: &mut Vec<PathBuf>, budget: &m
 struct Next {
     ids: u32,
     folds: u32,
+    /// For the fallback fonts the embedded text needs.
+    scripts: Scripts,
     search: Vec<SearchText>,
     images: Vec<String>,
 }
@@ -183,6 +187,7 @@ fn load(
     };
     next.ids += note.ids;
     next.folds += note.folds;
+    next.scripts = next.scripts.with(note.scripts);
     next.search.extend(
         note.search
             .iter()
@@ -537,6 +542,21 @@ mod tests {
             rich.links,
             [at(&["other", "c.md"]), at(&["notes", "gone.md"])]
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_scripts_of_embedded_notes_count() {
+        let root = vault(
+            "scripts",
+            &[("a.md", "English\n\n![[b]]\n"), ("b.md", "中文\n")],
+        );
+        let path = root.join("a.md");
+        let mut doc = Document::parse(&std::fs::read_to_string(&path).unwrap());
+        assert!(!doc.scripts.han_or_kana);
+        fill(&mut doc, &path);
+        assert!(doc.scripts.han_or_kana);
+        assert!(!doc.scripts.hangul);
         let _ = std::fs::remove_dir_all(&root);
     }
 

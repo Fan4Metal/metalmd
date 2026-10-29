@@ -270,6 +270,16 @@ pub struct Scripts {
     pub hangul: bool,
 }
 
+impl Scripts {
+    /// The scripts of both.
+    pub fn with(self, other: Scripts) -> Scripts {
+        Scripts {
+            han_or_kana: self.han_or_kana || other.han_or_kana,
+            hangul: self.hangul || other.hangul,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Document {
     pub blocks: Vec<Block>,
