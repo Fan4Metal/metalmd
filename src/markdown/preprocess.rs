@@ -676,7 +676,8 @@ fn internal_embeds<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a,
         code_and_math_ranges,
         rewrites,
         |caps| {
-            let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            // In a table Obsidian writes the `|` as `\|`.
+            let inner = caps.get(1).map_or("", |m| m.as_str()).replace("\\|", "|");
             let mut parts = inner.split('|');
             let path = parts.next().unwrap_or("").trim();
             // Nothing to embed: left as typed, not an image of the folder.
@@ -754,7 +755,9 @@ fn wikilinks<'a>(
                 return literal();
             }
 
-            let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            // In a table Obsidian writes the `|` as `\|`.
+            let inner = caps.get(1).map_or("", |m| m.as_str()).replace("\\|", "|");
+            let inner = inner.as_str();
             let (target, alias) = match inner.split_once('|') {
                 Some((target, alias)) => (target, Some(alias)),
                 None => (inner, None),

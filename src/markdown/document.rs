@@ -2353,6 +2353,25 @@ mod tests {
     }
 
     #[test]
+    fn embeds_and_wikilinks_in_tables_take_an_escaped_bar() {
+        let doc =
+            Document::parse("| a | b |\n|---|---|\n| ![[img.png\\|100]] | [[Note\\|alias]] |\n");
+        let Block::Table(table) = &doc.blocks[0] else {
+            panic!("{:?}", doc.blocks[0]);
+        };
+        let Inline::Image(image) = &table.rows[0][0][0] else {
+            panic!("{:?}", table.rows[0][0]);
+        };
+        assert_eq!(image.src, "img.png");
+        assert_eq!(image.width, Some(100.0));
+        let Inline::Text(rich) = &table.rows[0][1][0] else {
+            panic!("{:?}", table.rows[0][1]);
+        };
+        assert_eq!(rich.text, "alias");
+        assert_eq!(rich.links, ["Note.md"]);
+    }
+
+    #[test]
     fn sizes_in_alt_text_size_ordinary_images() {
         let image = |source: &str| {
             let doc = Document::parse(source);
