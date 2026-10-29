@@ -304,8 +304,9 @@ fn rebase(blocks: &mut [Block], offset: Offset, file: &Path, images: &mut Vec<St
 }
 
 /// `target`, a link or image source in the note `file`, as one that means
-/// the same from anywhere: a path relative to the note made absolute, an
-/// anchor alone made the note's.
+/// the same from anywhere: a path relative to the note made absolute (or,
+/// when it is not there, where the vault has it, as the viewer would look
+/// from the note's folder), an anchor alone made the note's.
 fn absolute(target: &str, file: &Path) -> String {
     let target = target.trim();
     if let Some(anchor) = target.strip_prefix('#') {
@@ -323,7 +324,13 @@ fn absolute(target: &str, file: &Path) -> String {
         return target.to_owned();
     }
     let folder = file.parent().unwrap_or(Path::new(""));
-    format!("{}{rest}", encode(&folder.join(decoded)))
+    let here = folder.join(&decoded);
+    let path = if here.exists() {
+        here
+    } else {
+        crate::vault::locate_now(folder, &decoded).unwrap_or(here)
+    };
+    format!("{}{rest}", encode(&path))
 }
 
 /// A path as a link destination that decodes back to it.
@@ -492,6 +499,43 @@ mod tests {
                 "The note is on another computer",
                 "Заметка на другом компьютере"
             )
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn what_an_embedded_note_links_is_found_in_the_vault() {
+        let root = vault(
+            "located",
+            &[
+                ("notes/a.md", "![[b]]\n"),
+                ("notes/b.md", "![[pic.png]] and [[c]] and [[gone]]\n"),
+                ("attachments/pic.png", "png"),
+                ("other/c.md", "# C\n"),
+            ],
+        );
+        let path = root.join("notes").join("a.md");
+        let mut doc = Document::parse(&std::fs::read_to_string(&path).unwrap());
+        fill(&mut doc, &path);
+        let b = content(&doc, 0).as_ref().unwrap();
+        let Block::Paragraph { inlines, .. } = &b[0] else {
+            panic!("{b:?}")
+        };
+        let Inline::Image(image) = &inlines[0] else {
+            panic!("{inlines:?}")
+        };
+        let at = |path: &[&str]| {
+            let mut full = root.clone();
+            full.extend(path);
+            full.to_string_lossy().into_owned()
+        };
+        assert_eq!(image.src, at(&["attachments", "pic.png"]));
+        let Inline::Text(rich) = &inlines[1] else {
+            panic!("{inlines:?}")
+        };
+        assert_eq!(
+            rich.links,
+            [at(&["other", "c.md"]), at(&["notes", "gone.md"])]
         );
         let _ = std::fs::remove_dir_all(&root);
     }
