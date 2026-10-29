@@ -685,11 +685,39 @@ impl Builder {
             return;
         };
         let (depth, line) = (table.depth, table.line);
+        let caption: Vec<u32> = table
+            .caption
+            .iter()
+            .filter_map(|inline| match inline {
+                Inline::Text(rich) => Some(rich.id),
+                Inline::Image(_) => None,
+            })
+            .collect();
+        let start = out.len();
         for block in table.finish() {
             if depth == 0 && line != self.line {
                 self.table_lines.push((out.len(), line));
             }
             out.push(block);
+        }
+        if depth == 0 {
+            // Its text was given the block it started at, which is the
+            // caption's when it has one: the table is the next.
+            if out.len() > start + 1 {
+                let at_start = self.search.iter_mut().rev();
+                for entry in at_start.take_while(|entry| entry.block == start) {
+                    if !caption.contains(&entry.id) {
+                        entry.block = start + 1;
+                    }
+                }
+                for block in self.anchors.values_mut() {
+                    if *block == start {
+                        *block = start + 1;
+                    }
+                }
+            }
+            // The block that ended it comes after it.
+            self.top = out.len();
         }
     }
 
@@ -2767,6 +2795,32 @@ mod tests {
             doc.blocks
         );
         assert_eq!(html_table(&doc, 1).1, [["in ner", "b"]]);
+    }
+
+    #[test]
+    fn find_points_at_html_tables_and_what_ends_them() {
+        let block_of = |doc: &Document, text: &str| {
+            let found = doc.search.iter().find(|s| s.text.contains(text));
+            found
+                .unwrap_or_else(|| panic!("{text:?} in {:?}", doc.search))
+                .block
+        };
+        let doc = Document::parse(
+            "<table><tr><td>Text</td><td>\n\n```js\nlet zz = 1;\n```\n\n</td></tr></table>\n",
+        );
+        assert!(
+            matches!(doc.blocks[1], Block::Code { .. }),
+            "{:?}",
+            doc.blocks
+        );
+        assert_eq!(block_of(&doc, "Text"), 0);
+        assert_eq!(block_of(&doc, "let zz"), 1);
+        let doc = Document::parse(
+            "<table><caption>Results</caption>\n<tr><td>cell</td></tr>\n</table>\n\nafter\n",
+        );
+        assert_eq!(block_of(&doc, "Results"), 0);
+        assert_eq!(block_of(&doc, "cell"), 1);
+        assert_eq!(block_of(&doc, "after"), 2);
     }
 
     #[test]
