@@ -67,6 +67,8 @@ pub struct Lightbox {
     wheel: f32,
     /// The current thumbnail is to be scrolled into view.
     reveal_thumb: bool,
+    /// Its context menu was open when the primary button was last pressed.
+    menu_at_press: bool,
 }
 
 impl Lightbox {
@@ -79,6 +81,7 @@ impl Lightbox {
             offset: Vec2::ZERO,
             wheel: 0.0,
             reveal_thumb: true,
+            menu_at_press: false,
         }
     }
 
@@ -121,10 +124,14 @@ impl Lightbox {
             ui.set_min_size(screen.size());
             let backdrop = ui.interact(screen, Id::new("lightbox-backdrop"), Sense::click());
             // A click that closes the menu must not close the viewer too.
+            // The menu closes on the press and the click is the release, a
+            // frame later or more, so what counts is the menu at the press.
             // (`Popup::default_response_id` is the response's id + "popup".)
-            let menu_open =
-                egui::Popup::is_id_open(ctx, egui::Popup::default_response_id(&backdrop))
-                    || egui::Popup::is_id_open(ctx, Id::new("lightbox-picture").with("popup"));
+            if ctx.input(|i| i.pointer.primary_pressed()) {
+                self.menu_at_press =
+                    egui::Popup::is_id_open(ctx, egui::Popup::default_response_id(&backdrop))
+                        || egui::Popup::is_id_open(ctx, Id::new("lightbox-picture").with("popup"));
+            }
             ui.painter()
                 .rect_filled(screen, 0.0, Color32::from_black_alpha(BACKDROP));
 
@@ -323,7 +330,7 @@ impl Lightbox {
                 self.zoom = None;
                 self.offset = Vec2::ZERO;
             }
-            if backdrop.clicked() && !menu_open {
+            if backdrop.clicked() && !self.menu_at_press {
                 open = false;
             }
         });
@@ -729,5 +736,58 @@ mod tests {
         assert_eq!(lightbox.index, 2);
         lightbox.go(-4);
         assert_eq!(lightbox.index, 1);
+    }
+
+    #[test]
+    fn a_click_closing_the_menu_keeps_the_viewer() {
+        use egui::PointerButton;
+        let pictures = Pictures {
+            math: crate::ui::math::MathRenderer::new(|| {}),
+            emoji: crate::ui::emoji::EmojiRenderer::new(|| {}),
+            diagrams: crate::ui::diagram::DiagramRenderer::new(|| {}),
+        };
+        let palette = Palette::new(false, crate::settings::DarkStyle::Grey);
+        let mut options = ViewerSettings::default();
+        let item = Item {
+            shown: Shown::Image("bytes://a.png".into()),
+            name: "a.png".into(),
+        };
+        let mut lightbox = Lightbox::new(vec![item], 0);
+        let ctx = egui::Context::default();
+        let mut right = crate::ui::menu::RightClick::default();
+        let mut frame = |mut events: Vec<egui::Event>| {
+            right.hook(&mut events);
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let mut open = false;
+            ctx.run_ui(raw, |ui| {
+                open = lightbox.show(ui.ctx(), &pictures, &palette, &mut options).0;
+            })
+            .drop_without_applying_deltas();
+            open
+        };
+        let button = |pos, button, pressed| egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (here, there) = (pos2(100.0, 100.0), pos2(600.0, 450.0));
+        assert!(frame(vec![egui::Event::PointerMoved(here)]));
+        assert!(frame(vec![button(here, PointerButton::Secondary, true)]));
+        assert!(frame(vec![button(here, PointerButton::Secondary, false)]));
+        assert!(frame(vec![]));
+        let menu = Id::new("lightbox-backdrop").with("popup");
+        assert!(egui::Popup::is_id_open(&ctx, menu));
+        assert!(frame(vec![egui::Event::PointerMoved(there)]));
+        assert!(frame(vec![button(there, PointerButton::Primary, true)]));
+        assert!(!egui::Popup::is_id_open(&ctx, menu));
+        assert!(frame(vec![button(there, PointerButton::Primary, false)]));
+        // With the menu closed, a click beside the picture closes it.
+        assert!(frame(vec![button(there, PointerButton::Primary, true)]));
+        assert!(!frame(vec![button(there, PointerButton::Primary, false)]));
     }
 }
