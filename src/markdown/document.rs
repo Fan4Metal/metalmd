@@ -286,6 +286,9 @@ pub struct Document {
     pub scripts: Scripts,
     /// The ids given out (`Rich`, code, formulas), embedded notes' too.
     pub ids: u32,
+    /// The numbers given out to `<details>` and foldable callouts,
+    /// embedded notes' too.
+    pub folds: u32,
 }
 
 impl Document {
@@ -365,6 +368,7 @@ impl Document {
             has_code: builder.has_code,
             scripts: detect_scripts(source),
             ids: builder.next_id,
+            folds: builder.details,
         };
         (doc, sources)
     }

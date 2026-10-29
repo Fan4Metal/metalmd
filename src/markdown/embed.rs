@@ -36,6 +36,7 @@ fn fill_in(doc: &mut Document, path: &Path, chain: &mut Vec<PathBuf>, budget: &m
     let base = path.parent().unwrap_or(Path::new("")).to_path_buf();
     let mut next = Next {
         ids: doc.ids,
+        folds: doc.folds,
         search: Vec::new(),
         images: Vec::new(),
     };
@@ -45,6 +46,7 @@ fn fill_in(doc: &mut Document, path: &Path, chain: &mut Vec<PathBuf>, budget: &m
         });
     }
     doc.ids = next.ids;
+    doc.folds = next.folds;
     doc.search.extend(next.search);
     // In document order: the embedded text where its block is.
     doc.search.sort_by_key(|s| s.block);
@@ -58,8 +60,17 @@ fn fill_in(doc: &mut Document, path: &Path, chain: &mut Vec<PathBuf>, budget: &m
 /// What the embeds of a document add to it.
 struct Next {
     ids: u32,
+    folds: u32,
     search: Vec<SearchText>,
     images: Vec<String>,
+}
+
+/// How far an embedded note's numbers move: past the document's, so the
+/// viewer tells its text and its folds from the document's.
+#[derive(Clone, Copy)]
+struct Offset {
+    ids: u32,
+    folds: u32,
 }
 
 fn has_embed(block: &Block) -> bool {
@@ -161,14 +172,18 @@ fn load(
     let kept: Vec<usize> = range
         .filter(|&i| !matches!(note.blocks[i], Block::FrontMatter { .. }))
         .collect();
-    let offset = next.ids;
+    let offset = Offset {
+        ids: next.ids,
+        folds: next.folds,
+    };
     next.ids += note.ids;
+    next.folds += note.folds;
     next.search.extend(
         note.search
             .iter()
             .filter(|s| kept.contains(&s.block))
             .map(|s| SearchText {
-                id: s.id + offset,
+                id: s.id + offset.ids,
                 block: top,
                 text: s.text.clone(),
             }),
@@ -193,15 +208,15 @@ fn section(note: &Document, anchor: &str) -> Option<std::ops::Range<usize>> {
     Some(start..end)
 }
 
-/// Moves the ids of `blocks` (from the note `file`) by `offset`, makes
-/// their links and images absolute (adding the images to `images`) and
-/// their task boxes read-only.
-fn rebase(blocks: &mut [Block], offset: u32, file: &Path, images: &mut Vec<String>) {
+/// Moves the ids and fold numbers of `blocks` (from the note `file`) by
+/// `offset`, makes their links and images absolute (adding the images to
+/// `images`) and their task boxes read-only.
+fn rebase(blocks: &mut [Block], offset: Offset, file: &Path, images: &mut Vec<String>) {
     let inlines = |inlines: &mut [Inline], images: &mut Vec<String>| {
         for inline in inlines {
             match inline {
                 Inline::Text(rich) => {
-                    rich.id += offset;
+                    rich.id += offset.ids;
                     for link in &mut rich.links {
                         *link = absolute(link, file);
                     }
@@ -223,11 +238,20 @@ fn rebase(blocks: &mut [Block], offset: u32, file: &Path, images: &mut Vec<Strin
             Block::Heading { inlines: i, .. } | Block::Paragraph { inlines: i, .. } => {
                 inlines(i, images)
             }
-            Block::Details { summary, .. } => inlines(summary, images),
-            Block::Code { id, .. } | Block::Math { id, .. } | Block::FrontMatter { id, .. } => {
-                *id += offset
+            Block::Details { index, summary, .. } => {
+                *index += offset.folds;
+                inlines(summary, images)
             }
-            Block::Quote(blocks) | Block::Alert { blocks, .. } | Block::Footnote { blocks, .. } => {
+            Block::Code { id, .. } | Block::Math { id, .. } | Block::FrontMatter { id, .. } => {
+                *id += offset.ids
+            }
+            Block::Alert { fold, blocks, .. } => {
+                if let Some(fold) = fold {
+                    fold.index += offset.folds;
+                }
+                rebase(blocks, offset, file, images)
+            }
+            Block::Quote(blocks) | Block::Footnote { blocks, .. } => {
                 rebase(blocks, offset, file, images)
             }
             Block::List { items, .. } => {
@@ -464,6 +488,36 @@ mod tests {
                 "Заметка на другом компьютере"
             )
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn embedded_folds_are_numbered_after_the_documents() {
+        let root = vault(
+            "folds",
+            &[
+                ("a.md", "> [!note]- A\n> a\n\n![[b]]\n\n> [!tip]+ C\n> c\n"),
+                (
+                    "b.md",
+                    "> [!tip]- B\n> b\n\n<details>\n<summary>S</summary>\n\nx\n\n</details>\n",
+                ),
+            ],
+        );
+        let path = root.join("a.md");
+        let mut doc = Document::parse(&std::fs::read_to_string(&path).unwrap());
+        assert_eq!(doc.folds, 2);
+        fill(&mut doc, &path);
+        let fold = |block: &Block| match block {
+            Block::Alert { fold: Some(f), .. } => f.index,
+            Block::Details { index, .. } => *index,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(fold(&doc.blocks[0]), 0);
+        assert_eq!(fold(&doc.blocks[2]), 1);
+        let b = content(&doc, 1).as_ref().unwrap();
+        assert_eq!(fold(&b[0]), 2);
+        assert_eq!(fold(&b[1]), 3);
+        assert_eq!(doc.folds, 4);
         let _ = std::fs::remove_dir_all(&root);
     }
 
