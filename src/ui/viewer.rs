@@ -1598,13 +1598,16 @@ fn text_format(rc: &RenderCtx<'_>, style: Style, size: f32) -> TextFormat {
             (false, false) => FontFamily::Proportional,
         }
     };
-    let color = if style.has(Style::LINK) {
+    let color = if style.has(Style::LINK) || style.has(Style::TAG) {
         palette.link
     } else {
         Color32::PLACEHOLDER
     };
     let background = if style.has(Style::MARK) {
         palette.mark_bg
+    } else if style.has(Style::TAG) {
+        // Obsidian's tag: the accent on a tint of it.
+        palette.link.linear_multiply(0.12)
     } else if mono {
         palette.code_bg
     } else {

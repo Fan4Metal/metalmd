@@ -35,6 +35,8 @@ impl Style {
     pub const DISPLAY: Style = Style(1 << 11);
     /// One emoji shown in colour (see [`super::emoji`]), a span of its own.
     pub const EMOJI: Style = Style(1 << 12);
+    /// An Obsidian tag, `#tag` or `#nested/tag`, a span of its own.
+    pub const TAG: Style = Style(1 << 13);
 
     pub fn has(self, other: Style) -> bool {
         self.0 & other.0 == other.0
@@ -1468,9 +1470,30 @@ impl InlineCtx {
         }
         let mut rest = &*text;
         while let Some(emoji) = super::emoji::find(rest) {
-            self.append(&rest[..emoji.start], style, merge);
+            self.append_with_tags(&rest[..emoji.start], style, merge);
             self.append(&rest[emoji.clone()], style | Style::EMOJI, false);
             rest = &rest[emoji.end..];
+        }
+        self.append_with_tags(rest, style, merge);
+    }
+
+    /// [`Self::append`], each Obsidian tag in `text` (outside links) a
+    /// `Style::TAG` span of its own.
+    fn append_with_tags(&mut self, text: &str, style: Style, merge: bool) {
+        if style.has(Style::LINK) || !text.contains('#') {
+            self.append(text, style, merge);
+            return;
+        }
+        let mut rest = text;
+        let mut merge = merge;
+        while let Some(tag) = find_tag(rest, self.cur.text.chars().next_back()) {
+            self.append(&rest[..tag.start], style, merge);
+            // A link of its own, which the app turns into a find.
+            self.link = Some(format!("{TAG_LINK}{}", &rest[tag.clone()]));
+            self.append(&rest[tag.clone()], style | Style::TAG, false);
+            self.link = None;
+            rest = &rest[tag.end..];
+            merge = false;
         }
         self.append(rest, style, merge);
     }
@@ -1870,6 +1893,35 @@ fn strip_front_matter_fences(raw: &str) -> String {
         lines.pop();
     }
     lines.join("\n")
+}
+
+/// The link a tag's span carries, followed by the tag (`#name`): a click
+/// on it finds the tag in the document.
+pub const TAG_LINK: &str = "metalmd-tag:";
+
+/// The first Obsidian tag in `text`: `#` at the start or after white
+/// space (`before` is the character before `text`), then letters, digits,
+/// `_`, `-` and `/`, not digits only (`#123` is no tag), not ending in `/`.
+fn find_tag(text: &str, before: Option<char>) -> Option<Range<usize>> {
+    let mut from = 0;
+    while let Some(found) = text[from..].find('#') {
+        let at = from + found;
+        from = at + 1;
+        let previous = text[..at].chars().next_back().or(before);
+        if previous.is_some_and(|c| !c.is_whitespace()) {
+            continue;
+        }
+        let body = &text[at + 1..];
+        let len = body
+            .char_indices()
+            .find(|&(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '/')))
+            .map_or(body.len(), |(i, _)| i);
+        let name = body[..len].trim_end_matches('/');
+        if !name.is_empty() && !name.chars().all(|c| c.is_ascii_digit()) {
+            return Some(at..at + 1 + name.len());
+        }
+    }
+    None
 }
 
 /// The (title, src) of each note embed of a paragraph made of nothing
@@ -2725,6 +2777,52 @@ mod tests {
             .map(|s| (&rich.text[s.range.clone()], s.style.has(Style::DISPLAY)))
             .collect();
         assert_eq!(maths, vec![("a", false), ("b", false), ("c", true)]);
+    }
+
+    #[test]
+    fn tags_are_found_as_obsidian_finds_them() {
+        let tags = |text: &str| {
+            let mut out = Vec::new();
+            let mut rest = text;
+            let mut before = None;
+            while let Some(range) = find_tag(rest, before) {
+                out.push(rest[range.clone()].to_owned());
+                before = rest[..range.end].chars().next_back();
+                rest = &rest[range.end..];
+            }
+            out
+        };
+        assert_eq!(
+            tags("#rust and #nested/tag, #тег_1."),
+            ["#rust", "#nested/tag", "#тег_1"]
+        );
+        assert_eq!(tags("#123 a#b (#c) #/ #a/ #x-y"), ["#a", "#x-y"]);
+        assert!(tags("url.com/#frag").is_empty());
+
+        let doc = Document::parse("See #todo, `#code` and [#link](x) #done\n");
+        let Block::Paragraph { inlines, .. } = &doc.blocks[0] else {
+            panic!()
+        };
+        let Inline::Text(rich) = &inlines[0] else {
+            panic!()
+        };
+        let tagged: Vec<&str> = rich
+            .spans
+            .iter()
+            .filter(|s| s.style.has(Style::TAG))
+            .map(|s| &rich.text[s.range.clone()])
+            .collect();
+        assert_eq!(tagged, ["#todo", "#done"]);
+        let link = rich
+            .spans
+            .iter()
+            .find(|s| s.style.has(Style::TAG))
+            .unwrap()
+            .link;
+        assert_eq!(
+            rich.links[link.unwrap() as usize],
+            format!("{TAG_LINK}#todo")
+        );
     }
 
     #[test]

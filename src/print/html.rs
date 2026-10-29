@@ -455,23 +455,28 @@ impl<'d> Writer<'d> {
 
     fn rich(&mut self, rich: &Rich) {
         let mut open_link: Option<u32> = None;
+        // What closes the open link: `</a>`, or `</span>` for a tag.
+        let mut close = "";
         for span in &rich.spans {
             if span.link != open_link {
-                if open_link.is_some() {
-                    self.out.push_str("</a>");
-                }
+                self.out.push_str(close);
+                close = "";
                 if let Some(link) = span.link {
                     let target = rich.links.get(link as usize).map_or("", String::as_str);
-                    let _ = write!(self.out, "<a href=\"{}\">", escape(&self.href(target)));
+                    if target.starts_with(crate::markdown::document::TAG_LINK) {
+                        self.out.push_str("<span class=\"tag\">");
+                        close = "</span>";
+                    } else {
+                        let _ = write!(self.out, "<a href=\"{}\">", escape(&self.href(target)));
+                        close = "</a>";
+                    }
                 }
                 open_link = span.link;
             }
             let text = rich.text.get(span.range.clone()).unwrap_or_default();
             self.span(text, span.style);
         }
-        if open_link.is_some() {
-            self.out.push_str("</a>");
-        }
+        self.out.push_str(close);
     }
 
     fn span(&mut self, text: &str, style: Style) {
@@ -762,6 +767,7 @@ img[width] { height: auto; }
 .alert { padding: .5em 1em; border-left: .25em solid var(--alert); }
 .alert-title { margin: 0 0 .5em; font-weight: 600; color: var(--alert); }
 .embed { padding: 0 1em; border-left: .25em solid $BORDER; }
+.tag { color: $LINK; background: #ddf4ff; border-radius: 1em; padding: 0 .4em; }
 .embed-title { margin: 0 0 .5em; font-size: .85em; color: $MUTED; }
 .alert-note { --alert: #0969da; }
 .alert-tip { --alert: #1a7f37; }

@@ -1460,6 +1460,16 @@ impl App {
 
     fn handle_action(&mut self, ctx: &egui::Context, action: ViewAction) {
         let target = match action {
+            ViewAction::OpenLink(target)
+                if target.starts_with(crate::markdown::document::TAG_LINK) =>
+            {
+                // A tag: found in the document, as Obsidian searches for it.
+                let tag = &target[crate::markdown::document::TAG_LINK.len()..];
+                let find = &mut self.win().find;
+                find.query = tag.to_owned();
+                find.open();
+                return;
+            }
             ViewAction::OpenLink(target) => target,
             ViewAction::ToggleTask(task) => {
                 self.edit(Change::Tick(task));
