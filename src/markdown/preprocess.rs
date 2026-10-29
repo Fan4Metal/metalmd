@@ -53,13 +53,15 @@ pub struct Rewrite {
 
 /// Where `at`, an offset in the output of the pass that made `rewrites`,
 /// was in its input. Inside a rewritten piece it is the start of what that
-/// piece was, or with `end` its end.
+/// piece was, or with `end` its end. Where a piece became nothing (a
+/// comment), a start is after it and an end before it, so a selection
+/// holds no more than was shown.
 pub fn before_rewrites(rewrites: &[Rewrite], at: usize, end: bool) -> usize {
     // Output minus input length of the rewrites passed.
     let mut grown = 0isize;
     for rewrite in rewrites {
         let out_start = rewrite.from.start.saturating_add_signed(grown);
-        if at <= out_start {
+        if at < out_start || (at == out_start && (end || rewrite.len > 0)) {
             break;
         }
         if at < out_start + rewrite.len {

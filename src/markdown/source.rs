@@ -767,6 +767,23 @@ mod tests {
             marked(source, "bold", "words"),
             "Before %%a\nhidden note%% ==**bold** words==\n"
         );
+        // A comment on its line ends where the selection starts.
+        let source = "x %%a%% plain words\n";
+        assert_eq!(md(source, "plain", "words"), "plain words");
+        assert_eq!(
+            marked(source, "plain", "words"),
+            "x %%a%% ==plain words==\n"
+        );
+        let source = "x %%a%% **bold** words\n";
+        assert_eq!(md(source, "bold", "words"), "**bold** words");
+        assert_eq!(
+            marked(source, "bold", "words"),
+            "x %%a%% ==**bold** words==\n"
+        );
+        // And starts where it ends.
+        let source = "x plain %%a%% words\n";
+        assert_eq!(md(source, "x", "plain"), "x plain");
+        assert_eq!(marked(source, "x", "plain"), "==x plain== %%a%% words\n");
     }
 
     #[test]
