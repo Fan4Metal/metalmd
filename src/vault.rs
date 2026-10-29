@@ -46,7 +46,7 @@ impl Index {
             made: Instant::now(),
         };
         let mut stack = vec![PathBuf::new()];
-        while let Some(relative) = stack.pop() {
+        'walk: while let Some(relative) = stack.pop() {
             let Ok(entries) = std::fs::read_dir(root.join(&relative)) else {
                 continue;
             };
@@ -63,7 +63,7 @@ impl Index {
                     continue;
                 }
                 if index.paths.len() >= MAX_FILES {
-                    break;
+                    break 'walk;
                 }
                 let path = relative.join(&*name);
                 let lower = path.to_string_lossy().replace('\\', "/").to_lowercase();
