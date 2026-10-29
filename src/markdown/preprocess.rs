@@ -118,13 +118,16 @@ pub fn heading_anchor_id(target: &str) -> String {
 pub const MARKDOWN_LINK_EXTENSIONS: [&str; 5] = ["md", "markdown", "mdown", "mkd", "txt"];
 
 /// The extension of the last path component, if the trailing `.segment`
-/// really reads as one. `v1.2 spec` has none, neither does `.gitignore`.
+/// really reads as one. `v1.2 spec` has none, neither does `.gitignore`,
+/// nor a name ending in digits after a dot (a date `2024.01.15`, a version
+/// `v1.2`), which Obsidian takes as a note's.
 pub fn link_path_extension(path: &str) -> Option<&str> {
     let name = path.rsplit(['/', '\\']).next()?;
     let (stem, ext) = name.rsplit_once('.')?;
     let plausible = !stem.is_empty()
         && (1..=8).contains(&ext.len())
-        && ext.chars().all(|c| c.is_ascii_alphanumeric());
+        && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        && ext.chars().any(|c| c.is_ascii_alphabetic());
     plausible.then_some(ext)
 }
 
@@ -1289,7 +1292,11 @@ mod tests {
                 "[My Note (v2)](My%20Note%20%28v2%29.md)\n",
             ),
             ("[[report.pdf]]\n", "[report.pdf](report.pdf)\n"),
+            ("[[song.mp3]]\n", "[song.mp3](song.mp3)\n"),
             ("[[Notes.md]]\n", "[Notes.md](Notes.md)\n"),
+            // Dates and versions are names of notes.
+            ("[[2024.01.15]]\n", "[2024.01.15](2024.01.15.md)\n"),
+            ("[[Release v1.2]]\n", "[Release v1.2](Release%20v1.2.md)\n"),
             ("[[Notes#]]\n", "[Notes](Notes.md)\n"),
             ("[[a_b*c]]\n", "[a\\_b\\*c](a_b*c.md)\n"),
         ] {

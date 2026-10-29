@@ -607,5 +607,12 @@ mod tests {
         assert!(
             matches!(&doc.blocks[2], Block::Embed { title, src, .. } if title == "c > X" && src == "c.md#x")
         );
+        // A daily note's name is no file extension.
+        let doc = Document::parse("![[2024.01.15]]\n");
+        assert!(
+            matches!(&doc.blocks[0], Block::Embed { src, .. } if src == "2024.01.15.md"),
+            "{:?}",
+            doc.blocks[0]
+        );
     }
 }
