@@ -619,15 +619,6 @@ fn math_ranges(content: &str, code: &[(usize, usize)]) -> Vec<(usize, usize)> {
     ranges
 }
 
-fn replace_outside_code<'a>(
-    content: &'a str,
-    re: &Regex,
-    rewrites: &mut Vec<Rewrite>,
-    f: impl FnMut(&Captures) -> String,
-) -> Cow<'a, str> {
-    replace_outside(content, re, code_region_ranges, rewrites, f)
-}
-
 /// Replaces the matches of `re` that do not start in one of the ranges
 /// `protected` finds, adding what changed to `rewrites`. Those ranges are
 /// found at the first match: most documents have none.
@@ -674,42 +665,48 @@ fn internal_embeds<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a,
     if !content.contains("![[") {
         return Cow::Borrowed(content);
     }
-    replace_outside_code(content, &INTERNAL_EMBED_RE, rewrites, |caps| {
-        let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-        let mut parts = inner.split('|');
-        let path = parts.next().unwrap_or("").trim();
-        // Nothing to embed: left as typed, not an image of the folder.
-        if path.is_empty() {
-            return caps[0].to_owned();
-        }
-        // A note, or a part of one: `![[Note]]`, `![[Note#Heading]]`,
-        // `![[Note#^block]]`. Its title names it.
-        let (file, part) = path.split_once('#').unwrap_or((path, ""));
-        let (file, part) = (file.trim(), part.trim());
-        if link_path_extension(file).is_none_or(|_| is_markdown_path(file)) {
-            if file.is_empty() {
+    replace_outside(
+        content,
+        &INTERNAL_EMBED_RE,
+        code_and_math_ranges,
+        rewrites,
+        |caps| {
+            let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let mut parts = inner.split('|');
+            let path = parts.next().unwrap_or("").trim();
+            // Nothing to embed: left as typed, not an image of the folder.
+            if path.is_empty() {
                 return caps[0].to_owned();
             }
-            let mut src = note_destination(file);
-            let mut title = file.to_owned();
-            if !part.is_empty() {
-                src = format!("{src}#{}", heading_anchor_id(part));
-                title = format!("{file} > {part}");
+            // A note, or a part of one: `![[Note]]`, `![[Note#Heading]]`,
+            // `![[Note#^block]]`. Its title names it.
+            let (file, part) = path.split_once('#').unwrap_or((path, ""));
+            let (file, part) = (file.trim(), part.trim());
+            if link_path_extension(file).is_none_or(|_| is_markdown_path(file)) {
+                if file.is_empty() {
+                    return caps[0].to_owned();
+                }
+                let mut src = note_destination(file);
+                let mut title = file.to_owned();
+                if !part.is_empty() {
+                    src = format!("{src}#{}", heading_anchor_id(part));
+                    title = format!("{file} > {part}");
+                }
+                let alt = escape_markdown_text(&title);
+                return format!("![{alt}]({src} \"{NOTE_EMBED_TITLE}\")");
             }
-            let alt = escape_markdown_text(&title);
-            return format!("![{alt}]({src} \"{NOTE_EMBED_TITLE}\")");
-        }
-        let size = parts
-            .next()
-            .map(str::trim)
-            .filter(|size| is_embed_size(size));
-        let src = encode_embed_destination(path);
-        let alt = escape_markdown_text(path);
-        match size {
-            Some(size) => format!("![{alt}]({src} \"{EMBED_SIZE_TITLE_PREFIX}{size}\")"),
-            None => format!("![{alt}]({src})"),
-        }
-    })
+            let size = parts
+                .next()
+                .map(str::trim)
+                .filter(|size| is_embed_size(size));
+            let src = encode_embed_destination(path);
+            let alt = escape_markdown_text(path);
+            match size {
+                Some(size) => format!("![{alt}]({src} \"{EMBED_SIZE_TITLE_PREFIX}{size}\")"),
+                None => format!("![{alt}]({src})"),
+            }
+        },
+    )
 }
 
 /// `[[Note]]`, `[[#Heading]]`, `[[Note#Heading]]` and their `|alias` forms
@@ -734,7 +731,8 @@ fn wikilinks<'a>(
         let source: &str = &processed;
         // Read only when a bare link needs them.
         let references = std::cell::OnceCell::new();
-        let replaced = replace_outside_code(source, &WIKILINK_RE, links, |caps| {
+        // `$[[x > 0]]$` is TeX (Iverson brackets), not a link.
+        let replaced = replace_outside(source, &WIKILINK_RE, code_and_math_ranges, links, |caps| {
             let full = caps.get(0).expect("group 0 always matches");
             let literal = || full.as_str().to_string();
             // A target spanning lines can never resolve, and rewriting it
@@ -1422,6 +1420,23 @@ mod tests {
         // Dollar amounts are prose, so a block id after them is one.
         let prose = "Costs $5 and then $6 ^cost\n";
         assert!(process_wikilinks(prose).contains("<a id=\"cost\""));
+    }
+
+    #[test]
+    fn wikilinks_and_embeds_are_not_read_in_math() {
+        let math = "Iverson $[[x > 0]]$ and $$[[e]]$$, but [[Note]]\n";
+        let out = process_wikilinks(math);
+        assert!(
+            out.starts_with("Iverson $[[x > 0]]$ and $$[[e]]$$"),
+            "{out}"
+        );
+        assert!(out.ends_with("[Note](Note.md)\n"), "{out}");
+        let display = "$$\n[[a]] + ![[b]]\n$$\n";
+        assert_eq!(process_wikilinks(display), display);
+        assert_eq!(process_internal_embeds(display), display);
+        // Dollar amounts are prose.
+        let prose = "Costs $5 and [[Note]] $6\n";
+        assert!(process_wikilinks(prose).contains("[Note](Note.md)"));
     }
 
     #[test]
