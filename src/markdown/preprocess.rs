@@ -1006,7 +1006,10 @@ mod tests {
         let input = "~~~\n![[inside.md]]\n~~~\n\n![[outside.md]]\n";
         let out = process_internal_embeds(input);
         assert!(out.contains("![[inside.md]]"), "got: {out}");
-        assert!(out.contains(r#"![outside.md](outside.md "qmd-note")"#), "got: {out}");
+        assert!(
+            out.contains(r#"![outside.md](outside.md "qmd-note")"#),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -1014,7 +1017,10 @@ mod tests {
         let input = "````\n```\n![[still-code.md]]\n````\n![[after.md]]\n";
         let out = process_internal_embeds(input);
         assert!(out.contains("![[still-code.md]]"), "got: {out}");
-        assert!(out.contains(r#"![after.md](after.md "qmd-note")"#), "got: {out}");
+        assert!(
+            out.contains(r#"![after.md](after.md "qmd-note")"#),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -1028,7 +1034,10 @@ mod tests {
         let input = "`` a ` ![[in-span.md]] `` then ![[outside.md]]\n";
         let out = process_internal_embeds(input);
         assert!(out.contains("![[in-span.md]]"), "got: {out}");
-        assert!(out.contains(r#"![outside.md](outside.md "qmd-note")"#), "got: {out}");
+        assert!(
+            out.contains(r#"![outside.md](outside.md "qmd-note")"#),
+            "got: {out}"
+        );
     }
 
     #[test]

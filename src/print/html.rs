@@ -233,6 +233,7 @@ impl<'d> Writer<'d> {
             Block::Alert {
                 kind,
                 title,
+                fold,
                 blocks,
             } => {
                 let _ = writeln!(
@@ -241,7 +242,12 @@ impl<'d> Writer<'d> {
                     alert_class(*kind),
                     escape(title)
                 );
-                self.blocks(blocks);
+                // A folded callout prints as the reader left it.
+                let open =
+                    fold.is_none_or(|f| f.open != self.options.toggled_details.contains(&f.index));
+                if open {
+                    self.blocks(blocks);
+                }
                 self.out.push_str("</div>\n");
             }
             Block::List {

@@ -6,7 +6,8 @@
 //! out taller or shorter than estimated, so the text being read never jumps.
 
 use crate::markdown::document::{
-    AlertKind, Align, Block, Document, ImageRef, Inline, ListItem, Rich, Span, Style, Table, Task,
+    AlertKind, Align, Block, Document, Fold, ImageRef, Inline, ListItem, Rich, Span, Style, Table,
+    Task,
 };
 use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
@@ -231,6 +232,12 @@ impl ViewState {
                 Block::Details { .. } => depth -= 1,
                 _ => {}
             }
+        }
+        // A folded callout is unfolded to show what is in it.
+        if let Some(Block::Alert { fold: Some(f), .. }) = doc.blocks.get(block)
+            && !details_open(f.index, f.open, &self.details)
+        {
+            self.toggle_details(f.index);
         }
     }
 
@@ -784,10 +791,14 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
         Block::Alert {
             kind,
             title,
+            fold,
             blocks,
         } => {
             let color = rc.palette.alert(*kind);
+            let open = fold.is_none_or(|f| details_open(f.index, f.open, &rc.details));
             draw_barred(ui, color, |ui| {
+                let actions = rc.actions.len();
+                let hover = rc.new_hover;
                 let title = egui::RichText::new(title)
                     .color(color)
                     .size(body_size())
@@ -797,8 +808,45 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
                     selection::label(ui, &response, pos, galley, color, Stroke::NONE);
                 }
                 text_menu(&response, rc, false);
-                ui.add_space(4.0);
-                draw_blocks(ui, blocks, rc, block_gap(), salt);
+                if let Some(fold) = fold {
+                    // A chevron after the title, as Obsidian draws it; a
+                    // click on the row folds or unfolds the callout.
+                    let r = body_size() * 0.25;
+                    let c = pos2(
+                        response.rect.right() + body_size() * 0.6,
+                        response.rect.center().y,
+                    );
+                    let points = if open {
+                        vec![
+                            c + vec2(-r, -0.5 * r),
+                            c + vec2(r, -0.5 * r),
+                            c + vec2(0.0, r),
+                        ]
+                    } else {
+                        vec![
+                            c + vec2(-0.5 * r, -r),
+                            c + vec2(r, 0.0),
+                            c + vec2(-0.5 * r, r),
+                        ]
+                    };
+                    ui.painter()
+                        .add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+                    let row = Rect::from_min_max(
+                        response.rect.min,
+                        pos2(ui.max_rect().right(), response.rect.max.y),
+                    );
+                    if ui.is_visible() && ui.rect_contains_pointer(row) && rc.new_hover == hover {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                        if rc.actions.len() == actions && ui.input(|i| i.pointer.primary_clicked())
+                        {
+                            rc.toggled = Some(fold.index);
+                        }
+                    }
+                }
+                if open {
+                    ui.add_space(4.0);
+                    draw_blocks(ui, blocks, rc, block_gap(), salt);
+                }
             });
         }
         Block::List {
@@ -2422,6 +2470,11 @@ fn estimate(block: &Block, width: f32) -> f32 {
                 + gap
         }
         Block::FrontMatter { .. } => line + gap,
+        // Folded as written: its title row (measured anew if unfolded).
+        Block::Alert {
+            fold: Some(Fold { open: false, .. }),
+            ..
+        } => line + gap,
         Block::Quote(blocks) | Block::Alert { blocks, .. } | Block::Footnote { blocks, .. } => {
             blocks
                 .iter()

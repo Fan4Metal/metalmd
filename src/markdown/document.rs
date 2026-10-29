@@ -138,6 +138,14 @@ pub struct Task {
     pub column: usize,
 }
 
+/// A foldable callout: its number among the `<details>` (whose toggled set
+/// in `ViewState` it shares) and whether it is written open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fold {
+    pub index: u32,
+    pub open: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Table {
     pub aligns: Vec<Align>,
@@ -172,6 +180,9 @@ pub enum Block {
     Alert {
         kind: AlertKind,
         title: String,
+        /// Set for an Obsidian callout written `[!type]-` (folded) or
+        /// `[!type]+` (open), which the title row folds and unfolds.
+        fold: Option<Fold>,
         blocks: Vec<Block>,
     },
     List {
@@ -578,6 +589,14 @@ struct Builder {
 }
 
 impl Builder {
+    /// A foldable callout's state, numbered with the `<details>`, whose
+    /// toggling it shares in the viewer.
+    fn fold(&mut self, open: bool) -> Fold {
+        let index = self.details;
+        self.details += 1;
+        Fold { index, open }
+    }
+
     fn alloc_id(&mut self) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
@@ -876,11 +895,13 @@ impl Builder {
             }
             NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => {
                 drop(data);
-                if let Some((kind, title)) = take_callout(node) {
+                if let Some((kind, title, fold)) = take_callout(node) {
+                    let fold = fold.map(|open| self.fold(open));
                     let blocks = self.children_blocks(node);
                     out.push(Block::Alert {
                         kind,
                         title,
+                        fold,
                         blocks,
                     });
                     return;
@@ -896,22 +917,22 @@ impl Builder {
                     AlertType::Warning => AlertKind::Warning,
                     AlertType::Caution => AlertKind::Caution,
                 };
-                // Obsidian's fold mark, `[!NOTE]-` or `[!NOTE]+`: the
-                // callout is shown open.
-                let title = alert
-                    .title
-                    .as_deref()
-                    .map(|title| title.strip_prefix(['-', '+']).unwrap_or(title).trim())
+                // Obsidian's fold mark, `[!NOTE]-` or `[!NOTE]+`, comes
+                // as the start of the title.
+                let (fold, title) = fold_mark(alert.title.as_deref().unwrap_or(""));
+                let title = Some(title.trim())
                     .filter(|title| !title.is_empty())
                     .map_or_else(
                         || alert.alert_type.default_title().to_owned(),
                         str::to_owned,
                     );
                 drop(data);
+                let fold = fold.map(|open| self.fold(open));
                 let blocks = self.children_blocks(node);
                 out.push(Block::Alert {
                     kind,
                     title,
+                    fold,
                     blocks,
                 });
             }
@@ -1883,8 +1904,8 @@ fn lone_display_math<'a>(node: Node<'a>) -> Option<String> {
 /// first line is `[!type]`, `[!type]-` or `[!type]+`, then an optional
 /// title. That line is taken out of the quote, and the callout comes back
 /// as the GitHub alert nearest in colour, titled with its type unless it
-/// has a title of its own. A fold mark is ignored: the callout is open.
-fn take_callout<'a>(quote: Node<'a>) -> Option<(AlertKind, String)> {
+/// has a title of its own, with its fold mark ([`fold_mark`]).
+fn take_callout<'a>(quote: Node<'a>) -> Option<(AlertKind, String, Option<bool>)> {
     let paragraph = quote.first_child()?;
     if !matches!(paragraph.data().value, NodeValue::Paragraph) {
         return None;
@@ -1911,7 +1932,7 @@ fn take_callout<'a>(quote: Node<'a>) -> Option<(AlertKind, String)> {
     {
         return None;
     }
-    let rest = rest.strip_prefix(['-', '+']).unwrap_or(rest);
+    let (fold, rest) = fold_mark(rest);
     // `[!info]text` is not a callout: the title is set off by a space.
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
@@ -1930,7 +1951,19 @@ fn take_callout<'a>(quote: Node<'a>) -> Option<(AlertKind, String)> {
     for inline in line {
         inline.detach();
     }
-    Some((callout_kind(kind), title))
+    Some((callout_kind(kind), title, fold))
+}
+
+/// Obsidian's fold mark after a callout's type: `-` folded, `+` open but
+/// foldable; `None` without one. And the rest of the line.
+fn fold_mark(rest: &str) -> (Option<bool>, &str) {
+    match rest.strip_prefix('-') {
+        Some(rest) => (Some(false), rest),
+        None => match rest.strip_prefix('+') {
+            Some(rest) => (Some(true), rest),
+            None => (None, rest),
+        },
+    }
 }
 
 /// The GitHub alert whose colour is nearest an Obsidian callout type's.
@@ -2568,10 +2601,40 @@ mod tests {
                     kind,
                     title,
                     blocks,
+                    ..
                 } => (*kind, title.clone(), plain_text_of(blocks)),
                 other => panic!("{other:?}"),
             }
         };
+        let fold = |source: &str| {
+            let doc = Document::parse(source);
+            doc.blocks
+                .iter()
+                .map(|b| match b {
+                    Block::Alert { fold, .. } => *fold,
+                    other => panic!("{other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        // Folded, open, not foldable; numbered with the `<details>`.
+        assert_eq!(
+            fold("> [!info]- A\n> a\n\n> [!NOTE]+\n> b\n\n> [!tip]\n> c\n\n> [!bug]-\n> d\n"),
+            [
+                Some(Fold {
+                    index: 0,
+                    open: false
+                }),
+                Some(Fold {
+                    index: 1,
+                    open: true
+                }),
+                None,
+                Some(Fold {
+                    index: 2,
+                    open: false
+                }),
+            ]
+        );
         assert_eq!(
             alert("> [!info] Custom\n> body\n"),
             (AlertKind::Note, "Custom".to_owned(), "body".to_owned())
