@@ -457,6 +457,15 @@ fn thumb_height(options: &ViewerSettings) -> f32 {
     )
 }
 
+/// The largest scale a diagram of `natural` size is drawn at: within what
+/// `render_cache::rasterize` and the GPU take, a pixel spare, and a step
+/// of the render cache's rounding (1/32) below that, as one above would
+/// fail for good.
+fn largest_scale(natural: Vec2, max_texture_side: usize) -> f32 {
+    let side = max_texture_side.min(8192) as f32 - 1.0;
+    (side / natural.x.max(natural.y) * 32.0).floor() / 32.0
+}
+
 /// The scale a picture of `natural` size opens at in a stage of `room`.
 fn start_scale(mode: StartZoom, room: Vec2, natural: Vec2) -> f32 {
     let (w, h) = (room.x / natural.x, room.y / natural.y);
@@ -640,9 +649,8 @@ fn paint(
         }
         Shown::Diagram(source) => {
             let ppp = ui.ctx().pixels_per_point();
-            // Within the texture size every GPU takes.
-            let largest = 8192.0 / natural.x.max(natural.y);
-            let scale = (zoom * ppp).min(largest);
+            let max_side = ui.ctx().input(|i| i.max_texture_side);
+            let scale = (zoom * ppp).min(largest_scale(natural, max_side));
             let ctx = ui.ctx();
             let diagram = match pictures.diagrams.get_zoomed(ctx, source, dark, scale) {
                 super::render_cache::State::Ready(diagram) => Some(diagram),
@@ -736,6 +744,19 @@ mod tests {
         assert_eq!(lightbox.index, 2);
         lightbox.go(-4);
         assert_eq!(lightbox.index, 1);
+    }
+
+    #[test]
+    fn zoomed_diagrams_stay_within_the_texture_size() {
+        for width in [800.0, 1500.0, 333.3, 77.7, 4000.0] {
+            for side in [8192, 16384, 4096] {
+                let scale = largest_scale(vec2(width, 100.0), side);
+                // As `RenderCache::get` rounds it and `diagram::render` sizes it.
+                let rounded = (scale * 32.0).round() / 32.0;
+                let pixels = (width * rounded).ceil() as usize;
+                assert!(pixels <= side.min(8192), "{width} at {side}: {pixels}");
+            }
+        }
     }
 
     #[test]

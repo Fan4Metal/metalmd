@@ -192,16 +192,23 @@ impl<M: Send + Sync + 'static> RenderCache<M> {
         let entry = cache.entries.entry(key).or_default();
         entry.last_used = now;
         if let Some((rendered, at)) = entry.image.take() {
-            let bytes = rendered.image.pixels.len() * 4;
-            let texture =
-                ctx.load_texture(self.inner.name, rendered.image, self.inner.texture_options);
-            entry.picture = Some(Arc::new(Picture {
-                meta: rendered.meta,
-                texture,
-                scale: at,
-            }));
-            cache.bytes = cache.bytes - entry.bytes + bytes;
-            entry.bytes = bytes;
+            let [w, h] = rendered.image.size;
+            if w.max(h) > ctx.input(|i| i.max_texture_side) {
+                // More than the GPU takes: egui_glow would assert, which
+                // ends the app.
+                entry.error = Some(format!("picture too large ({w}x{h} px)").into());
+            } else {
+                let bytes = rendered.image.pixels.len() * 4;
+                let texture =
+                    ctx.load_texture(self.inner.name, rendered.image, self.inner.texture_options);
+                entry.picture = Some(Arc::new(Picture {
+                    meta: rendered.meta,
+                    texture,
+                    scale: at,
+                }));
+                cache.bytes = cache.bytes - entry.bytes + bytes;
+                entry.bytes = bytes;
+            }
         }
         if let Some(error) = &entry.error {
             return State::Failed(Arc::clone(error));
