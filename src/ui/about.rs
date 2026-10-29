@@ -1,7 +1,8 @@
 //! The About dialog: icon, name, version, a short description, the author,
-//! the license, the Markpad credit, where the settings are kept, the
-//! interface language and the update check.
+//! the license with the Licenses window, the Markpad credit, where the
+//! settings are kept, the interface language and the update check.
 
+use super::licenses::LicensesView;
 use crate::i18n::LangChoice;
 use crate::update::{Status, Updates, release_url, version_of};
 use egui::{Key, TextureHandle, Ui};
@@ -17,12 +18,16 @@ pub struct About {
     /// Opened this frame: the key that opened it must not close it.
     pub fresh: bool,
     icon: Option<TextureHandle>,
+    /// The Licenses window is shown in place of the dialog; closed, it
+    /// gives way to the dialog again.
+    licenses: Option<LicensesView>,
 }
 
 impl About {
     pub fn toggle(&mut self) {
         self.open = !self.open;
         self.fresh = self.open;
+        self.licenses = None;
     }
 
     /// Draws the dialog while it is open; closes it on the cross, Esc,
@@ -32,12 +37,20 @@ impl About {
         if !self.open {
             return;
         }
+        if let Some(view) = &mut self.licenses {
+            if view.show(ctx) {
+                self.licenses = None;
+                self.fresh = true;
+            }
+            return;
+        }
         const ICON: f32 = 64.0;
         const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
         const LICENSE: &str = env!("CARGO_PKG_LICENSE");
         /// Cargo joins several authors with `:`.
         const AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
         let fresh = std::mem::take(&mut self.fresh);
+        let mut show_licenses = false;
         let icon = super::app_icon(ctx, ICON, &mut self.icon);
         let modal = egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
             ui.set_width(340.0);
@@ -79,27 +92,39 @@ impl About {
                 {
                     let _ = open::that_detached(REPOSITORY);
                 }
-                if !LICENSE.is_empty() {
-                    ui.weak(tr!(
-                        format!("{LICENSE} License"),
-                        format!("Лицензия {LICENSE}")
-                    ));
-                }
                 ui.add_space(6.0);
-                ui.weak(tr!(
-                    "Markdown support is ported from",
-                    "Поддержка Markdown перенесена из"
-                ));
-                if ui
-                    .link(tr!("Markpad by Alec Ames", "Markpad (автор Alec Ames)"))
-                    .on_hover_text(format!(
-                        "{MARKPAD_URL}\n{}",
-                        tr!("BSD 3-Clause License", "Лицензия BSD 3-Clause")
-                    ))
-                    .clicked()
-                {
-                    let _ = open::that_detached(MARKPAD_URL);
-                }
+                // The licence and the way to the texts on one line.
+                centered_row(ui, "license", |ui| {
+                    if !LICENSE.is_empty() {
+                        ui.weak(tr!(
+                            format!("{LICENSE} License"),
+                            format!("Лицензия {LICENSE}")
+                        ));
+                        ui.weak("·");
+                    }
+                    if ui.link(tr!("Licenses…", "Лицензии…")).clicked() {
+                        show_licenses = true;
+                    }
+                });
+                centered_row(ui, "markpad", |ui| {
+                    ui.weak(tr!(
+                        "Markdown support is ported from",
+                        "Поддержка Markdown перенесена из"
+                    ));
+                    if ui
+                        .link("Markpad")
+                        .on_hover_text(format!(
+                            "{MARKPAD_URL}\n{}",
+                            tr!(
+                                "By Alec Ames, BSD 3-Clause License",
+                                "Автор Alec Ames, лицензия BSD 3-Clause"
+                            )
+                        ))
+                        .clicked()
+                    {
+                        let _ = open::that_detached(MARKPAD_URL);
+                    }
+                });
                 ui.add_space(6.0);
                 let stored = crate::settings::location();
                 let place = ui.weak(if stored.portable {
@@ -154,9 +179,33 @@ impl About {
             || (!fresh
                 && (ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter))
                     || modal.should_close()));
-        if closed {
+        if show_licenses {
+            self.licenses = Some(LicensesView::default());
+        } else if closed {
             self.open = false;
         }
+    }
+}
+
+/// `add` on one row centred in `ui`: padded by the row's width in the
+/// previous frame (a horizontal layout cannot centre what it has not
+/// measured yet), and the frame the width changes is drawn again.
+fn centered_row(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
+    let id = ui.id().with(id);
+    let known: Option<f32> = ui.data(|d| d.get_temp(id));
+    let width = ui
+        .horizontal(|ui| {
+            // Words apart as in text, not as buttons.
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.add_space(((ui.available_width() - known.unwrap_or(0.0)) / 2.0).max(0.0));
+            let left = ui.cursor().left();
+            add(ui);
+            ui.min_rect().right() - left
+        })
+        .inner;
+    if known.is_none_or(|w| (w - width).abs() > 0.5) {
+        ui.data_mut(|d| d.insert_temp(id, width));
+        ui.ctx().request_discard("about row width");
     }
 }
 

@@ -8,6 +8,7 @@ pub mod diagram;
 pub mod emoji;
 pub mod find;
 pub mod home;
+pub mod licenses;
 pub mod lightbox;
 pub mod limit;
 pub mod math;
@@ -455,6 +456,13 @@ fn paint_theme_icon(
             painter.circle_filled(pos2(c.x + 3.0, c.y - 2.2), 5.0, fill);
         }
     }
+}
+
+/// The size of a modal of `wanted` points, cut to the window less
+/// `margin` on each side.
+pub fn modal_size(ctx: &egui::Context, wanted: egui::Vec2, margin: f32) -> egui::Vec2 {
+    let room = ctx.content_rect().size() - egui::vec2(2.0 * margin, 2.0 * margin);
+    wanted.min(room).max(egui::vec2(200.0, 160.0))
 }
 
 /// A cross that closes a dialog; true when clicked.

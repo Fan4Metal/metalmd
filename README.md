@@ -261,4 +261,4 @@ MetalMD is built on these open-source projects:
 
 MIT, see [LICENSE](LICENSE).
 
-The code ported from Markpad (`src/markdown/preprocess.rs`, `src/fs_text.rs`) and `samples/markdown-syntax.md` are under the BSD 3-Clause License; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). That file ships with the program.
+The code ported from Markpad (`src/markdown/preprocess.rs`, `src/fs_text.rs`) and `samples/markdown-syntax.md` are under the BSD 3-Clause License, and `src/ui/selection.rs` is adapted from egui (MIT); see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). The licences and copyright notices of the Rust libraries and fonts compiled into the program are in [licenses/THIRD_PARTY_NOTICES.txt](licenses/THIRD_PARTY_NOTICES.txt), those of the syntax definitions and colour themes used for code in [licenses/SYNTAXES_AND_THEMES.txt](licenses/SYNTAXES_AND_THEMES.txt). The program shows these texts in its About window (**Licenses…**), and the installer and the portable archive include them as files.

@@ -28,10 +28,23 @@ EXE = ROOT / "target" / "release" / "metalmd.exe"
 ICON = ROOT / "target" / "app.ico"
 
 # Files the installer takes from the repository (see [Files] in setup.iss).
-BUNDLED_FILES = ["LICENSE", "THIRD_PARTY_LICENSES.md", "README.md", "README.ru.md"]
+BUNDLED_FILES = [
+    "LICENSE",
+    "THIRD_PARTY_LICENSES.md",
+    "licenses/THIRD_PARTY_NOTICES.txt",
+    "licenses/SYNTAXES_AND_THEMES.txt",
+    "README.md",
+    "README.ru.md",
+]
 # Licences shipped with the portable archive (the documentation is on GitHub);
-# THIRD_PARTY_LICENSES.md carries the BSD-3 notice of the code from Markpad.
-PORTABLE_FILES = ["LICENSE", "THIRD_PARTY_LICENSES.md"]
+# THIRD_PARTY_LICENSES.md carries the BSD-3 notice of the code from Markpad; the
+# licenses folder, the notices of the crates, fonts, syntaxes and themes compiled in.
+PORTABLE_FILES = [
+    "LICENSE",
+    "THIRD_PARTY_LICENSES.md",
+    "licenses/THIRD_PARTY_NOTICES.txt",
+    "licenses/SYNTAXES_AND_THEMES.txt",
+]
 # Folder inside the portable archive, so that extracting "here" does not drop the exe among other files.
 PORTABLE_DIR = "MetalMD"
 # Must match settings::PORTABLE_FILE in src/settings.rs.

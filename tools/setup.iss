@@ -67,6 +67,9 @@ Source: "..\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignorevers
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 ; BSD-3 notice of the code ported from Markpad: required with the binary.
 Source: "..\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
+; Notices of the crates, fonts, syntaxes and themes compiled in (tools\notices.py).
+Source: "..\licenses\THIRD_PARTY_NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\licenses\SYNTAXES_AND_THEMES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.ru.md"; DestDir: "{app}"; Flags: ignoreversion
 
