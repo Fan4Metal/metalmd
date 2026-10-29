@@ -223,7 +223,7 @@ fn wikilink_file_destination(path: &str) -> Option<String> {
 
 /// The destination of a bare wikilink: any file Obsidian links to (an
 /// image, a PDF), `.md` appended when the target has no extension.
-fn note_destination(path: &str) -> String {
+pub fn note_destination(path: &str) -> String {
     match link_path_extension(path) {
         Some(_) => encode_link_destination(path),
         None => format!("{}.md", encode_link_destination(path)),
@@ -253,8 +253,25 @@ fn reference_labels(content: &str) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// Where the front matter that comrak takes (`---` on the first line, up
+/// to the next `---` line) ends, after its closing line's end.
+fn front_matter_end(content: &str) -> Option<usize> {
+    let rest = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))?;
+    let mut at = content.len() - rest.len();
+    for line in rest.split_inclusive('\n') {
+        at += line.len();
+        if line.trim_end() == "---" {
+            return Some(at);
+        }
+    }
+    None
+}
+
 /// Byte ranges of code regions (fenced and indented code blocks, inline code
-/// spans) paired with CommonMark's rules, in ascending document order.
+/// spans) paired with CommonMark's rules, in ascending document order. The
+/// front matter counts as one too: it is YAML, which no rewrite may touch.
 ///
 /// Indented code blocks are recognised only where a line scan can be sure of
 /// one: after a blank line, at the top level, outside any list.
@@ -263,11 +280,15 @@ pub fn code_region_ranges(content: &str) -> Vec<(usize, usize)> {
     let mut regions: Vec<(usize, usize)> = Vec::new();
     // (fence char, opener run length, region start)
     let mut fence: Option<(u8, usize, usize)> = None;
-    let mut seg_start = 0usize;
+    let front_matter = front_matter_end(content).unwrap_or(0);
+    if front_matter > 0 {
+        regions.push((0, front_matter));
+    }
+    let mut seg_start = front_matter;
     let mut prev_blank = true;
     let mut list_open = false;
 
-    let mut line_start = 0usize;
+    let mut line_start = front_matter;
     while line_start < len {
         let in_fence = fence.is_some();
         let line_end = content[line_start..]
@@ -1265,6 +1286,20 @@ mod tests {
         ] {
             assert_eq!(process_wikilinks(input), output);
         }
+    }
+
+    #[test]
+    fn front_matter_is_left_as_written() {
+        let input = "---\nrelated: \"[[Note]]\"\nnote: 50%% done %%\n---\n[[Note]] ![[pic.png]]\n";
+        let out = preprocess(input);
+        assert!(
+            out.starts_with("---\nrelated: \"[[Note]]\"\nnote: 50%% done %%\n---\n"),
+            "{out}"
+        );
+        assert!(out.contains("[Note](Note.md) ![pic.png](pic.png)"), "{out}");
+        // Not front matter: `---` later, or no closing line.
+        assert!(preprocess("text\n---\n[[a]]\n---\n").contains("[a](a.md)"));
+        assert!(preprocess("---\n[[a]]\n").contains("[a](a.md)"));
     }
 
     #[test]

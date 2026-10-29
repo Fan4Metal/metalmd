@@ -767,7 +767,18 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             draw_summary(ui, *index, open, summary, rc, salt);
         }
         Block::DetailsEnd => {}
-        Block::FrontMatter { id, yaml } => {
+        Block::FrontMatter {
+            properties: Some(properties),
+            ..
+        } if !properties.is_empty() => {
+            egui::CollapsingHeader::new(
+                egui::RichText::new(tr!("Properties", "Свойства")).color(rc.palette.muted),
+            )
+            .id_salt(("properties", salt))
+            .default_open(true)
+            .show(ui, |ui| draw_properties(ui, properties, rc));
+        }
+        Block::FrontMatter { id, yaml, .. } => {
             egui::CollapsingHeader::new(
                 egui::RichText::new(tr!("Front matter", "Метаданные")).color(rc.palette.muted),
             )
@@ -929,6 +940,120 @@ fn indented<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let result = add(ui);
     ui.data_mut(|d| d.insert_temp(Id::new("indents"), depth));
     result
+}
+
+/// Text of the document that is not a `Rich`: laid out, selectable with
+/// the rest (`selection::label`), and its response.
+fn doc_label(ui: &mut Ui, text: egui::RichText, color: Color32) -> Response {
+    let (pos, galley, response) = Label::new(text).selectable(true).layout_in_ui(ui);
+    if ui.is_rect_visible(response.rect) {
+        selection::label(ui, &response, pos, galley, color, Stroke::NONE);
+    }
+    response
+}
+
+/// Obsidian's Properties: a row per key, the key muted on the left, the
+/// values on the right; a list's values as chips. A value that is a
+/// wikilink (`"[[Note]]"`) or a web address is a link.
+fn draw_properties(
+    ui: &mut Ui,
+    properties: &[crate::markdown::properties::Property],
+    rc: &mut RenderCtx<'_>,
+) {
+    let size = body_size() * 0.9;
+    let font = egui::FontId::proportional(size);
+    let key_width = properties
+        .iter()
+        .map(|p| {
+            ui.fonts_mut(|f| f.layout_no_wrap(p.key.clone(), font.clone(), Color32::PLACEHOLDER))
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max)
+        .min(ui.available_width() * 0.35)
+        .ceil();
+    // Whole points throughout: egui lays text out on whole pixels.
+    let gap = body_size().round();
+    for property in properties {
+        ui.horizontal_top(|ui| {
+            let (key, _) = ui.allocate_exact_size(vec2(key_width + gap, 0.0), Sense::hover());
+            let mut key_ui = ui.new_child(
+                egui::UiBuilder::new().max_rect(Rect::from_min_size(key.min, vec2(key_width, 1e4))),
+            );
+            let muted = rc.palette.muted;
+            doc_label(
+                &mut key_ui,
+                egui::RichText::new(&property.key).size(size).color(muted),
+                muted,
+            );
+            let key_height = key_ui.min_rect().height();
+            ui.vertical(|ui| {
+                ui.set_min_height(key_height);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing =
+                        vec2((body_size() * 0.3).round(), (body_size() * 0.25).round());
+                    for value in &property.values {
+                        draw_property_value(ui, value, property.list, size, rc);
+                    }
+                });
+            });
+        });
+        ui.add_space((body_size() * 0.2).round());
+    }
+}
+
+fn draw_property_value(ui: &mut Ui, value: &str, chip: bool, size: f32, rc: &mut RenderCtx<'_>) {
+    // `[[Note]]`, `[[Note|alias]]`, or a web address.
+    let wikilink = value
+        .strip_prefix("[[")
+        .and_then(|v| v.strip_suffix("]]"))
+        .filter(|v| !v.contains(['[', ']']));
+    let (text, link) = match wikilink {
+        Some(inner) => {
+            let (target, alias) = inner.split_once('|').unwrap_or((inner, inner));
+            let (file, part) = target.split_once('#').unwrap_or((target, ""));
+            let mut link = crate::markdown::preprocess::note_destination(file.trim());
+            if !part.trim().is_empty() {
+                link = format!(
+                    "{link}#{}",
+                    crate::markdown::preprocess::heading_anchor_id(part)
+                );
+            }
+            (alias.trim().to_owned(), Some(link))
+        }
+        None if value.starts_with("http://") || value.starts_with("https://") => {
+            (value.to_owned(), Some(value.to_owned()))
+        }
+        None => (value.to_owned(), None),
+    };
+    let color = if link.is_some() {
+        rc.palette.link
+    } else {
+        ui.visuals().text_color()
+    };
+    let text = egui::RichText::new(text).size(size).color(color);
+    let response = if chip {
+        // Laid out first, then the chip painted under the text.
+        let (pos, galley, response) = Label::new(text).selectable(true).layout_in_ui(ui);
+        if ui.is_rect_visible(response.rect) {
+            ui.painter().rect_filled(
+                response.rect.expand2(vec2(body_size() * 0.25, 1.0)),
+                CornerRadius::same(255),
+                rc.palette.code_bg,
+            );
+            selection::label(ui, &response, pos, galley, color, Stroke::NONE);
+        }
+        ui.add_space((body_size() * 0.3).round());
+        response
+    } else {
+        doc_label(ui, text, color)
+    };
+    if let Some(link) = link {
+        let response = response.on_hover_cursor(CursorIcon::PointingHand);
+        if response.clicked() {
+            rc.actions.push(ViewAction::OpenLink(link));
+        }
+    }
 }
 
 /// An embedded note: its name over its blocks, beside a bar in the accent
@@ -2469,6 +2594,10 @@ fn estimate(block: &Block, width: f32) -> f32 {
                 + 24.0
                 + gap
         }
+        Block::FrontMatter {
+            properties: Some(properties),
+            ..
+        } => (properties.len() + 1) as f32 * line + gap,
         Block::FrontMatter { .. } => line + gap,
         // Folded as written: its title row (measured anew if unfolded).
         Block::Alert {

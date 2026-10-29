@@ -200,6 +200,8 @@ pub enum Block {
     FrontMatter {
         id: u32,
         yaml: String,
+        /// Its keys and values, when it is the flat YAML Obsidian writes.
+        properties: Option<Vec<super::properties::Property>>,
     },
     Rule,
     /// The `<summary>` row of a `<details>`. The blocks after it, up to its
@@ -822,7 +824,12 @@ impl Builder {
                 let id = self.alloc_id();
                 self.add_search(id, &yaml);
                 self.track_block(id);
-                out.push(Block::FrontMatter { id, yaml });
+                let properties = super::properties::parse(&yaml);
+                out.push(Block::FrontMatter {
+                    id,
+                    yaml,
+                    properties,
+                });
             }
             NodeValue::Paragraph => {
                 if let Some(tex) = lone_display_math(node) {

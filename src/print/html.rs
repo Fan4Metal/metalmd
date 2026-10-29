@@ -299,6 +299,26 @@ impl<'d> Writer<'d> {
                 self.blocks(blocks);
                 self.out.push_str("</div>\n");
             }
+            Block::FrontMatter {
+                properties: Some(properties),
+                ..
+            } if !properties.is_empty() => {
+                let _ = writeln!(self.out, "<table class=\"properties\"{id_attr}>");
+                for property in properties {
+                    let values = property
+                        .values
+                        .iter()
+                        .map(|v| escape(v).replace('\n', "<br>"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let _ = writeln!(
+                        self.out,
+                        "<tr><th>{}</th><td>{values}</td></tr>",
+                        escape(&property.key)
+                    );
+                }
+                self.out.push_str("</table>\n");
+            }
             Block::FrontMatter { yaml, .. } => {
                 let _ = writeln!(
                     self.out,
@@ -756,6 +776,8 @@ img[width] { height: auto; }
 .footnote { font-size: .875em; color: $MUTED; }
 .footnote-label { float: left; margin-right: .4em; }
 .front-matter { color: $MUTED; }
+table.properties th { text-align: left; font-weight: normal; color: $MUTED; background: none; }
+table.properties th, table.properties td { border: none; padding: .1em 1em .1em 0; }
 .error, .missing { color: $MUTED; font-size: .875em; }
 summary { margin-bottom: .5em; }
 "#;

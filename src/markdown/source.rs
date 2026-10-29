@@ -353,7 +353,7 @@ fn each_part(blocks: &[Block], f: &mut impl FnMut(Part, &str)) {
             }
             Block::Details { summary, .. } => inlines(summary, f),
             Block::Code { id, code, .. } => f(Part::Code(*id), code),
-            Block::FrontMatter { id, yaml } => f(Part::Code(*id), yaml),
+            Block::FrontMatter { id, yaml, .. } => f(Part::Code(*id), yaml),
             Block::Quote(blocks) | Block::Alert { blocks, .. } | Block::Footnote { blocks, .. } => {
                 each_part(blocks, f)
             }
