@@ -140,34 +140,30 @@ def lock_hash() -> str:
 
 
 def crates():
-    """The packages compiled into the exe: normal dependencies, for Windows;
-    not procedural macros (serde_derive and the like run in the compiler) nor
-    what only they use (syn, quote, proc-macro2)."""
-    meta = json.loads(
-        subprocess.run(
-            ["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", TARGET],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-        ).stdout
-    )
-    nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
-    packages = {p["id"]: p for p in meta["packages"]}
+    """The packages compiled into the exe, as `cargo tree` lists them: normal
+    dependencies for Windows with the features the build turns on (`cargo
+    metadata` also has the optional ones a weak `dep?/feature` names, such as
+    wgpu), not procedural macros (serde_derive and the like run in the
+    compiler) nor what only they use (syn, quote, proc-macro2)."""
 
-    def proc_macro(i):
-        return any("proc-macro" in t["kind"] for t in packages[i]["targets"])
+    def cargo(*args):
+        return subprocess.run(["cargo", *args], cwd=ROOT, check=True, capture_output=True).stdout
 
+    meta = json.loads(cargo("metadata", "--format-version", "1", "--locked", "--filter-platform", TARGET))
+    tree = cargo(
+        "tree", "--locked", "-e", "normal,no-proc-macro", "--target", TARGET, "--prefix", "none", "--format", "{p}"
+    ).decode()
+    # "name v1.2.3", "name v1.2.3 (*)" for one listed before.
+    compiled = set()
+    for line in tree.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].startswith("v"):
+            compiled.add((parts[0], parts[1][1:]))
     root = meta["resolve"]["root"]
-    seen, stack = set(), [root]
-    while stack:
-        node = stack.pop()
-        if node in seen:
-            continue
-        seen.add(node)
-        for dep in nodes[node]["deps"]:
-            if any(k["kind"] is None for k in dep["dep_kinds"]) and not proc_macro(dep["pkg"]):
-                stack.append(dep["pkg"])
-    return sorted((packages[i] for i in seen if i != root), key=lambda p: (p["name"], p["version"]))
+    return sorted(
+        (p for p in meta["packages"] if p["id"] != root and (p["name"], p["version"]) in compiled),
+        key=lambda p: (p["name"], p["version"]),
+    )
 
 
 def normalized(text: str) -> str:
