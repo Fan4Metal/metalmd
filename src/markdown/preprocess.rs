@@ -22,10 +22,12 @@ use std::sync::LazyLock;
 /// spans lines, so a stray `![[` cannot pair with a `]]` several lines below.
 static INTERNAL_EMBED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"!\[\[(.*?)\]\]").expect("valid regex literal"));
-/// `[[target]]` / `[[target|alias]]` where the target names a heading. The `#`
-/// is a cheap prefilter; `process_wikilinks` re-checks it is in the target.
+/// `[[target]]` / `[[target|alias]]` on one line.
 static WIKILINK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[\[([^\]]*#[^\]]*)\]\]").expect("valid regex literal"));
+    LazyLock::new(|| Regex::new(r"\[\[([^\[\]\n]+)\]\]").expect("valid regex literal"));
+/// The label of a link reference definition, `[label]: destination`.
+static REFERENCE_DEFINITION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^ {0,3}\[([^\[\]]+)\]:").expect("valid regex literal"));
 /// ` ^block-id` at the end of a line. The leading whitespace is captured and
 /// re-emitted so a block id alone on its own line keeps its newline. `R`
 /// makes `$` match before `\r\n` and `\r` too: files from Windows editors.
@@ -214,6 +216,38 @@ fn wikilink_file_destination(path: &str) -> Option<String> {
         Some(_) => is_markdown_path(path).then(|| encode_link_destination(path)),
         None => Some(format!("{}.md", encode_link_destination(path))),
     }
+}
+
+/// The destination of a bare wikilink: any file Obsidian links to (an
+/// image, a PDF), `.md` appended when the target has no extension.
+fn note_destination(path: &str) -> String {
+    match link_path_extension(path) {
+        Some(_) => encode_link_destination(path),
+        None => format!("{}.md", encode_link_destination(path)),
+    }
+}
+
+/// A link label as CommonMark matches it: case folded, runs of white
+/// space as one space, trimmed.
+fn reference_label(label: &str) -> String {
+    label
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// The labels of the link reference definitions outside code.
+fn reference_labels(content: &str) -> std::collections::HashSet<String> {
+    if !content.contains("]:") {
+        return Default::default();
+    }
+    let regions = code_region_ranges(content);
+    REFERENCE_DEFINITION_RE
+        .captures_iter(content)
+        .filter(|caps| !in_code_region(&regions, caps.get(0).map_or(0, |m| m.start())))
+        .filter_map(|caps| caps.get(1).map(|m| reference_label(m.as_str())))
+        .collect()
 }
 
 /// Byte ranges of code regions (fenced and indented code blocks, inline code
@@ -635,10 +669,10 @@ fn internal_embeds<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a,
     })
 }
 
-/// `[[#Heading]]`, `[[file#Heading]]` and their `|alias` forms become
-/// Markdown links; ` ^block-id` at a line end becomes an empty anchor.
-/// Bare `[[Note]]` is left literal on purpose: it would swallow `[[1]]`
-/// citations and CommonMark reference links.
+/// `[[Note]]`, `[[#Heading]]`, `[[Note#Heading]]` and their `|alias` forms
+/// become Markdown links; ` ^block-id` at a line end becomes an empty
+/// anchor. A bare `[[label]]` whose label has a reference definition
+/// (`[label]: url`) stays: CommonMark reads it as that link in brackets.
 #[cfg(test)]
 pub fn process_wikilinks(content: &str) -> Cow<'_, str> {
     wikilinks(content, &mut Vec::new(), &mut Vec::new())
@@ -655,6 +689,8 @@ fn wikilinks<'a>(
 
     if content.contains("[[") && WIKILINK_RE.is_match(&processed) {
         let source: &str = &processed;
+        // Read only when a bare link needs them.
+        let references = std::cell::OnceCell::new();
         let replaced = replace_outside_code(source, &WIKILINK_RE, links, |caps| {
             let full = caps.get(0).expect("group 0 always matches");
             let literal = || full.as_str().to_string();
@@ -679,12 +715,25 @@ fn wikilinks<'a>(
             };
             let alias = alias.filter(|a| !a.trim().is_empty());
             // Only a `#` in the target half makes a heading link.
-            let Some((path, heading)) = target.split_once('#') else {
-                return literal();
-            };
+            let (path, heading) = target.split_once('#').unwrap_or((target, ""));
             let (path, heading) = (path.trim(), heading.trim());
             if heading.is_empty() {
-                return literal();
+                if path.is_empty() {
+                    return literal();
+                }
+                // `[[1]]` with `[1]: url` defined is a link to that URL
+                // in square brackets, as CommonMark reads it.
+                let references = references.get_or_init(|| reference_labels(source));
+                if references.contains(&reference_label(inner)) {
+                    return literal();
+                }
+                return format!(
+                    "[{}]({})",
+                    alias
+                        .map(str::to_string)
+                        .unwrap_or_else(|| escape_markdown_text(path)),
+                    note_destination(path),
+                );
             }
             let anchor = heading_anchor_id(heading);
 
@@ -1167,15 +1216,43 @@ mod tests {
     }
 
     #[test]
-    fn wikilinks_without_a_heading_are_deliberately_left_literal() {
-        for input in [
-            "[[Notes]]\n",
-            "[[1]] Author, Title.\n",
-            "[[TODO]] revisit this.\n",
-            "[[foo]] and [[foo|bar]]\n",
-            "[[docs/Guide|Guide]]\n",
-            "[[Notes|see #1]]\n",
+    fn bare_wikilinks_link_to_notes() {
+        for (input, output) in [
+            ("[[Notes]]\n", "[Notes](Notes.md)\n"),
+            (
+                "[[foo]] and [[foo|bar]]\n",
+                "[foo](foo.md) and [bar](foo.md)\n",
+            ),
+            ("[[docs/Guide|Guide]]\n", "[Guide](docs/Guide.md)\n"),
+            ("[[Notes|see #1]]\n", "[see #1](Notes.md)\n"),
+            (
+                "[[My Note (v2)]]\n",
+                "[My Note (v2)](My%20Note%20%28v2%29.md)\n",
+            ),
+            ("[[report.pdf]]\n", "[report.pdf](report.pdf)\n"),
+            ("[[Notes.md]]\n", "[Notes.md](Notes.md)\n"),
+            ("[[Notes#]]\n", "[Notes](Notes.md)\n"),
+            ("[[a_b*c]]\n", "[a\\_b\\*c](a_b*c.md)\n"),
         ] {
+            assert_eq!(process_wikilinks(input), output);
+        }
+    }
+
+    #[test]
+    fn bare_wikilinks_with_a_reference_definition_stay() {
+        // CommonMark reads `[[1]]` as the link `[1]` in brackets.
+        for input in [
+            "[[1]] Author, Title.\n\n[1]: https://example.com\n",
+            "See [[Foo  Bar]].\n\n   [foo bar]: /x\n",
+        ] {
+            assert_eq!(process_wikilinks(input), input, "should be literal");
+        }
+        // A definition in code does not count.
+        assert_eq!(
+            process_wikilinks("[[1]]\n\n```\n[1]: x\n```\n"),
+            "[1](1.md)\n\n```\n[1]: x\n```\n"
+        );
+        for input in ["[[]]\n", "[[|alias]]\n", "[[ ]]\n"] {
             assert_eq!(process_wikilinks(input), input, "should be literal");
         }
     }
