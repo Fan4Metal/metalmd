@@ -115,7 +115,7 @@ fn main() -> eframe::Result {
         if restored && i != active {
             deferred.push((id, path.clone()));
         } else {
-            app::spawn_load(sender.clone(), ctx_cell.clone(), id, 0, path.clone());
+            app::spawn_first_load(sender.clone(), ctx_cell.clone(), id, path.clone());
         }
         tabs.push((id, path));
     }

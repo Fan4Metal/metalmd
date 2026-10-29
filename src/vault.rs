@@ -7,7 +7,8 @@
 //! Nothing of this runs at startup: a vault is listed only when something
 //! in it is missing, on a thread of its own when a frame asks
 //! ([`locate`], which says `Waiting` meanwhile and repaints when the list
-//! is ready) or at once for a click or printing ([`locate_now`]).
+//! is ready) or at once for a click, printing or a note embed, which the
+//! loader fills after the first document is sent ([`locate_now`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

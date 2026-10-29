@@ -29,8 +29,13 @@ pub fn fill(doc: &mut Document, path: &Path) {
     fill_in(doc, path, &mut vec![path.to_path_buf()], &mut budget);
 }
 
+/// Whether `doc` has note embeds for [`fill`] to fill.
+pub fn has_embeds(doc: &Document) -> bool {
+    doc.blocks.iter().any(has_embed)
+}
+
 fn fill_in(doc: &mut Document, path: &Path, chain: &mut Vec<PathBuf>, budget: &mut usize) {
-    if !doc.blocks.iter().any(has_embed) {
+    if !has_embeds(doc) {
         return;
     }
     let base = path.parent().unwrap_or(Path::new("")).to_path_buf();

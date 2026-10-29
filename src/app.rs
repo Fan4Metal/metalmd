@@ -176,14 +176,18 @@ pub struct LoadError {
     pub is_dir: bool,
 }
 
-pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
+/// Reads and parses the document at `path`, its note embeds filled unless
+/// `embeds` is false.
+pub fn load_file(path: &Path, embeds: bool) -> Result<Loaded, LoadError> {
     let decoded = fs_text::read_to_string_lossy(path).map_err(|e| LoadError {
         message: e.to_string(),
         not_found: e.kind() == std::io::ErrorKind::NotFound,
         is_dir: path.is_dir(),
     })?;
     let mut doc = Document::parse(&decoded.content);
-    crate::markdown::embed::fill(&mut doc, path);
+    if embeds {
+        crate::markdown::embed::fill(&mut doc, path);
+    }
     Ok(Loaded {
         doc: Arc::new(doc),
         encoding: decoded.encoding,
@@ -260,18 +264,57 @@ fn hidden_title(id: u64) -> String {
 }
 
 pub fn spawn_load(sender: Sender<AppMsg>, cell: CtxCell, tab: u64, generation: u64, path: PathBuf) {
+    spawn_loader(sender, cell, tab, generation, path, false);
+}
+
+/// [`spawn_load`] for a document of the first frame. Its note embeds read
+/// other files and may list a whole vault, so it is sent without them and
+/// again, filled, in a second `Loaded`.
+pub fn spawn_first_load(sender: Sender<AppMsg>, cell: CtxCell, tab: u64, path: PathBuf) {
+    spawn_loader(sender, cell, tab, 0, path, true);
+}
+
+fn spawn_loader(
+    sender: Sender<AppMsg>,
+    cell: CtxCell,
+    tab: u64,
+    generation: u64,
+    path: PathBuf,
+    embeds_later: bool,
+) {
     std::thread::Builder::new()
         .name("load".into())
         // comrak and the document builder recurse once per nesting level.
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
-            let result = load_file(&path);
-            let _ = sender.send(AppMsg::Loaded {
-                tab,
-                generation,
-                result,
-            });
-            request_repaint(&cell);
+            let send = |result| {
+                let _ = sender.send(AppMsg::Loaded {
+                    tab,
+                    generation,
+                    result,
+                });
+                request_repaint(&cell);
+            };
+            let result = load_file(&path, !embeds_later);
+            let later = match &result {
+                Ok(loaded) if embeds_later && crate::markdown::embed::has_embeds(&loaded.doc) => {
+                    Some((
+                        Document::clone(&loaded.doc),
+                        loaded.encoding.clone(),
+                        loaded.lossy,
+                    ))
+                }
+                _ => None,
+            };
+            send(result);
+            if let Some((mut doc, encoding, lossy)) = later {
+                crate::markdown::embed::fill(&mut doc, &path);
+                send(Ok(Loaded {
+                    doc: Arc::new(doc),
+                    encoding,
+                    lossy,
+                }));
+            }
         })
         .expect("spawn loader thread");
 }
