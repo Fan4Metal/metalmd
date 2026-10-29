@@ -424,11 +424,20 @@ impl<'d> Writer<'d> {
         for item in items {
             match item.task {
                 Some(task) => {
-                    let checked = if task.checked { " checked" } else { "" };
-                    let _ = write!(
-                        self.out,
-                        "<li class=\"task\"><input type=\"checkbox\" disabled{checked}>"
-                    );
+                    if task.checked || task.mark == ' ' {
+                        let checked = if task.checked { " checked" } else { "" };
+                        let _ = write!(
+                            self.out,
+                            "<li class=\"task\"><input type=\"checkbox\" disabled{checked}>"
+                        );
+                    } else {
+                        // Another status: its mark in a box.
+                        let mark = escape(&task.mark.to_string());
+                        let _ = write!(
+                            self.out,
+                            "<li class=\"task\"><span class=\"task-mark\">{mark}</span>"
+                        );
+                    }
                 }
                 None => self.out.push_str("<li>"),
             }
@@ -767,6 +776,7 @@ img[width] { height: auto; }
 .alert { padding: .5em 1em; border-left: .25em solid var(--alert); }
 .alert-title { margin: 0 0 .5em; font-weight: 600; color: var(--alert); }
 .embed { padding: 0 1em; border-left: .25em solid $BORDER; }
+.task-mark { display: inline-block; width: 1em; height: 1em; line-height: 1em; margin-right: .3em; text-align: center; font-size: .85em; border: 1px solid $MUTED; border-radius: 3px; color: $MUTED; }
 .tag { color: $LINK; background: #ddf4ff; border-radius: 1em; padding: 0 .4em; }
 .embed-title { margin: 0 0 .5em; font-size: .85em; color: $MUTED; }
 .alert-note { --alert: #0969da; }

@@ -88,6 +88,8 @@ pub fn markdown_options<'a>() -> Options<'a> {
     options.extension.table = true;
     options.extension.autolink = true;
     options.extension.tasklist = true;
+    // Any mark between the brackets, as Obsidian takes them: `[/]`, `[-]`.
+    options.parse.relaxed_tasklist_matching = true;
     options.extension.highlight = true;
     options.extension.inline_footnotes = true;
     options.extension.insert = true;

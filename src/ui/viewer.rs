@@ -1168,8 +1168,9 @@ fn draw_list(
                         vec2(side, side),
                     );
                     // Line 0: an embedded note's, which cannot be ticked
-                    // from here (`markdown::embed`).
-                    let editable = task.line > 0;
+                    // from here (`markdown::embed`); a status other than
+                    // ` ` and `x` is only shown.
+                    let editable = task.line > 0 && matches!(task.mark, ' ' | 'x' | 'X');
                     let response = ui.interact(
                         rect.expand(3.0),
                         ui.id().with(("task", task.line, task.column)),
@@ -1187,7 +1188,56 @@ fn draw_list(
                     if response.clicked() {
                         rc.actions.push(ViewAction::ToggleTask(task));
                     }
-                    if task.checked {
+                    let accent = rc.palette.accent;
+                    let muted = rc.palette.muted;
+                    let outline = |color| {
+                        painter.rect_stroke(
+                            rect,
+                            CornerRadius::same(3),
+                            Stroke::new(1.5, color),
+                            egui::StrokeKind::Inside,
+                        )
+                    };
+                    if !task.checked && task.mark != ' ' {
+                        match task.mark {
+                            // Cancelled: a dash across a muted box.
+                            '-' => {
+                                outline(muted);
+                                painter.hline(
+                                    rect.x_range().shrink(side * 0.25),
+                                    rect.center().y,
+                                    Stroke::new(1.5, muted),
+                                );
+                            }
+                            // In progress: half filled.
+                            '/' => {
+                                outline(accent);
+                                let half =
+                                    Rect::from_min_max(rect.min, pos2(rect.center().x, rect.max.y));
+                                painter.rect_filled(
+                                    half,
+                                    CornerRadius {
+                                        nw: 3,
+                                        sw: 3,
+                                        ne: 0,
+                                        se: 0,
+                                    },
+                                    accent,
+                                );
+                            }
+                            // Any other status: its mark in the box.
+                            mark => {
+                                outline(accent);
+                                painter.text(
+                                    rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    mark,
+                                    egui::FontId::proportional(side * 0.8),
+                                    accent,
+                                );
+                            }
+                        }
+                    } else if task.checked {
                         painter.rect_filled(rect, CornerRadius::same(3), rc.palette.accent);
                         let a = rect.left_center() + vec2(side * 0.22, 0.0);
                         let b = rect.center_bottom() + vec2(-side * 0.08, -side * 0.25);

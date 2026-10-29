@@ -133,7 +133,11 @@ pub struct ListItem {
 /// comrak gives in the preprocessed text is the same in the file's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Task {
+    /// Ticked: `x` or `X` between the brackets.
     pub checked: bool,
+    /// What is between the brackets: ` `, `x`, or one of the statuses
+    /// Obsidian's themes draw (`/` in progress, `-` cancelled, `>`, `?`…).
+    pub mark: char,
     /// The line of the character between the brackets, from 1.
     pub line: usize,
     /// Its byte offset in the line, from 1.
@@ -952,7 +956,8 @@ impl Builder {
                 for item in node.children() {
                     let task = match &item.data().value {
                         NodeValue::TaskItem(task) => Some(Task {
-                            checked: task.symbol.is_some(),
+                            checked: matches!(task.symbol, Some('x' | 'X')),
+                            mark: task.symbol.unwrap_or(' '),
                             line: task.symbol_sourcepos.start.line,
                             column: task.symbol_sourcepos.start.column,
                         }),
@@ -2777,6 +2782,31 @@ mod tests {
             .map(|s| (&rich.text[s.range.clone()], s.style.has(Style::DISPLAY)))
             .collect();
         assert_eq!(maths, vec![("a", false), ("b", false), ("c", true)]);
+    }
+
+    #[test]
+    fn task_statuses_keep_their_mark() {
+        let doc =
+            Document::parse("- [ ] a\n- [x] b\n- [X] c\n- [/] d\n- [-] e\n- [>] f\n- [?] g\n");
+        let Block::List { items, .. } = &doc.blocks[0] else {
+            panic!()
+        };
+        let marks: Vec<(char, bool)> = items
+            .iter()
+            .map(|i| i.task.map(|t| (t.mark, t.checked)).unwrap())
+            .collect();
+        assert_eq!(
+            marks,
+            [
+                (' ', false),
+                ('x', true),
+                ('X', true),
+                ('/', false),
+                ('-', false),
+                ('>', false),
+                ('?', false)
+            ]
+        );
     }
 
     #[test]
