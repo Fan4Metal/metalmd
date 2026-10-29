@@ -1694,6 +1694,30 @@ impl InlineCtx {
                 self.push_text(&collect_text(node), style);
                 self.link = saved;
             }
+            NodeValue::Image(link) if is_other_file(&link.url) => {
+                // Obsidian embeds a PDF, a sound, a video or any file with
+                // `![[file.pdf]]`: a viewer of its own, here a link to it.
+                let url = link.url.clone();
+                drop(data);
+                let alt = collect_text(node);
+                let text = alt
+                    .rsplit_once('|')
+                    .map_or(alt.as_str(), |(text, _)| text.trim_end());
+                let text = match text.trim() {
+                    "" => preprocess::percent_decode(
+                        url.split(['?', '#'])
+                            .next()
+                            .unwrap_or(&url)
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&url),
+                    ),
+                    text => text.to_owned(),
+                };
+                let saved = self.link.replace(self.link.clone().unwrap_or(url));
+                self.push_text(&text, style);
+                self.link = saved;
+            }
             NodeValue::Image(link) => {
                 let src = link.url.clone();
                 let title = link.title.clone();
@@ -1898,6 +1922,24 @@ fn strip_front_matter_fences(raw: &str) -> String {
         lines.pop();
     }
     lines.join("\n")
+}
+
+/// Whether an image's source names a local file that is no picture (a
+/// PDF, a sound, a video, a spreadsheet): one with an extension that is
+/// not of an image. A source without one may still be a picture, and so
+/// may a web address with any (`avatar.php`).
+fn is_other_file(src: &str) -> bool {
+    const PICTURES: [&str; 14] = [
+        "png", "jpg", "jpeg", "jfif", "gif", "webp", "svg", "bmp", "ico", "apng", "avif", "tif",
+        "tiff", "heic",
+    ];
+    let src = src.trim();
+    if src.contains("://") && !src.starts_with("file:") || src.starts_with("data:") {
+        return false;
+    }
+    let path = src.split(['?', '#']).next().unwrap_or(src);
+    preprocess::link_path_extension(path)
+        .is_some_and(|ext| !PICTURES.iter().any(|p| ext.eq_ignore_ascii_case(p)))
 }
 
 /// The link a tag's span carries, followed by the tag (`#name`): a click
@@ -2782,6 +2824,32 @@ mod tests {
             .map(|s| (&rich.text[s.range.clone()], s.style.has(Style::DISPLAY)))
             .collect();
         assert_eq!(maths, vec![("a", false), ("b", false), ("c", true)]);
+    }
+
+    #[test]
+    fn embedded_files_that_are_no_pictures_are_links() {
+        let doc = Document::parse(
+            "![[report.pdf]] ![PC](!assets/PC/PC.xlsx) ![](a%20b/song.mp3) ![x](pic.png) ![w](https://e.com/a.php)\n",
+        );
+        let Block::Paragraph { inlines, .. } = &doc.blocks[0] else {
+            panic!()
+        };
+        let Inline::Text(rich) = &inlines[0] else {
+            panic!()
+        };
+        assert_eq!(rich.text, "report.pdf PC song.mp3 ");
+        assert_eq!(
+            rich.links,
+            ["report.pdf", "!assets/PC/PC.xlsx", "a%20b/song.mp3"]
+        );
+        let images: Vec<&str> = inlines
+            .iter()
+            .filter_map(|i| match i {
+                Inline::Image(image) => Some(image.src.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images, ["pic.png", "https://e.com/a.php"]);
     }
 
     #[test]
