@@ -1476,7 +1476,26 @@ impl App {
                 return;
             }
             ViewAction::ShowPicture(shown) => {
-                self.win().lightbox = Some(crate::ui::lightbox::Lightbox::new(shown));
+                // With every picture of the document, to go through them.
+                let mut items = self
+                    .win()
+                    .active_tab()
+                    .and_then(|tab| {
+                        let base = tab.path.parent();
+                        tab.doc
+                            .as_ref()
+                            .map(|doc| crate::ui::viewer::document_pictures(ctx, doc, base))
+                    })
+                    .unwrap_or_default();
+                let index = match items.iter().position(|item| item.shown == shown) {
+                    Some(index) => index,
+                    None => {
+                        let name = crate::ui::viewer::picture_name(&shown, "");
+                        items.insert(0, crate::ui::lightbox::Item { shown, name });
+                        0
+                    }
+                };
+                self.win().lightbox = Some(crate::ui::lightbox::Lightbox::new(items, index));
                 return;
             }
             ViewAction::CopyMarkdown => {
@@ -2950,10 +2969,13 @@ impl App {
         {
             self.apply_text_change(&ctx, change);
         }
-        if let Some(lightbox) = self.windows[cur].lightbox.as_mut()
-            && !lightbox.show(&ctx, &self.pictures, &palette)
-        {
-            self.windows[cur].lightbox = None;
+        if let Some(lightbox) = self.windows[cur].lightbox.as_mut() {
+            let (open, changed) =
+                lightbox.show(&ctx, &self.pictures, &palette, &mut self.settings.viewer);
+            if !open {
+                self.windows[cur].lightbox = None;
+            }
+            self.settings_dirty |= changed;
         }
         if let Some(target) = self.windows[cur].confirm.show(&ctx) {
             self.open_target(target);

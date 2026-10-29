@@ -2454,6 +2454,101 @@ fn image_source(ctx: &egui::Context, src: &str, base_dir: Option<&Path>) -> (Opt
     }
 }
 
+/// Every picture of `doc` the viewer opens with a click, in document
+/// order: images that are not links (galleries' and embedded notes' too)
+/// and Mermaid diagrams, by the URI or source the click gives
+/// (`ViewAction::ShowPicture`).
+pub fn document_pictures(
+    ctx: &egui::Context,
+    doc: &Document,
+    base_dir: Option<&Path>,
+) -> Vec<super::lightbox::Item> {
+    use super::lightbox::{Item, Shown};
+    fn image(ctx: &egui::Context, image: &ImageRef, base: Option<&Path>, out: &mut Vec<Item>) {
+        if image.link.is_some() {
+            return;
+        }
+        if let Some(uri) = image_source(ctx, &image.src, base).0 {
+            let shown = Shown::Image(uri);
+            let name = picture_name(&shown, &image.alt);
+            out.push(Item { shown, name });
+        }
+    }
+    fn inlines(ctx: &egui::Context, inlines: &[Inline], base: Option<&Path>, out: &mut Vec<Item>) {
+        for inline in inlines {
+            if let Inline::Image(i) = inline {
+                image(ctx, i, base, out);
+            }
+        }
+    }
+    fn walk(ctx: &egui::Context, blocks: &[Block], base: Option<&Path>, out: &mut Vec<Item>) {
+        for block in blocks {
+            match block {
+                Block::Heading { inlines: i, .. } | Block::Paragraph { inlines: i, .. } => {
+                    inlines(ctx, i, base, out)
+                }
+                Block::Details { summary, .. } => inlines(ctx, summary, base, out),
+                Block::Code { lang, code, .. } if lang.eq_ignore_ascii_case("mermaid") => {
+                    let shown = Shown::Diagram(code.clone());
+                    let name = picture_name(&shown, "");
+                    out.push(Item { shown, name });
+                }
+                Block::Quote(blocks)
+                | Block::Alert { blocks, .. }
+                | Block::Footnote { blocks, .. } => walk(ctx, blocks, base, out),
+                Block::Embed {
+                    content: Some(Ok(blocks)),
+                    ..
+                } => walk(ctx, blocks, base, out),
+                Block::List { items, .. } => {
+                    for item in items {
+                        walk(ctx, &item.blocks, base, out);
+                    }
+                }
+                Block::Table(table) => {
+                    for cell in table.header.iter().chain(table.rows.iter().flatten()) {
+                        inlines(ctx, cell, base, out);
+                    }
+                }
+                Block::DefinitionList(items) => {
+                    for (terms, details) in items {
+                        walk(ctx, terms, base, out);
+                        for detail in details {
+                            walk(ctx, detail, base, out);
+                        }
+                    }
+                }
+                Block::Gallery { images, .. } => {
+                    for i in images {
+                        image(ctx, i, base, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(ctx, &doc.blocks, base_dir, &mut out);
+    out
+}
+
+/// The name the picture viewer shows: an image's file name (its alt text
+/// for one without), or "Diagram".
+pub fn picture_name(shown: &super::lightbox::Shown, alt: &str) -> String {
+    match shown {
+        super::lightbox::Shown::Diagram(_) => tr!("Diagram", "Диаграмма").to_owned(),
+        super::lightbox::Shown::Image(uri) => {
+            let path = uri.split(['?', '#']).next().unwrap_or(uri);
+            let name = percent_decode(path.rsplit(['/', '\\']).next().unwrap_or(path));
+            if name.is_empty() || uri.starts_with("data:") {
+                alt.to_owned()
+            } else {
+                name
+            }
+        }
+    }
+}
+
 /// [`image_uri`] for a page to print: a relative file that is not there
 /// is looked for in the vault at once.
 pub fn image_uri_now(src: &str, base_dir: Option<&Path>) -> Option<String> {

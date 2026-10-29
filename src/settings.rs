@@ -64,6 +64,69 @@ pub enum TocSide {
     Right,
 }
 
+/// What the wheel does in the picture viewer, as the Image Viewer
+/// plugin's option: zoom (the arrow keys go to the next picture), or go to
+/// the next picture (Ctrl+wheel zooms).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WheelMode {
+    #[default]
+    Zoom,
+    Navigate,
+}
+
+/// How a picture is scaled when the viewer shows it (the plugin's default
+/// zoom): fitted without being enlarged, fitted, filling the height or the
+/// width, or at its own size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StartZoom {
+    #[default]
+    FitDown,
+    Fit,
+    Height,
+    Width,
+    Actual,
+}
+
+/// The shape of the picture viewer's thumbnails, as the plugin's option.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThumbShape {
+    #[default]
+    Landscape,
+    Portrait,
+    Square,
+}
+
+/// The picture viewer's options (`ui::lightbox`), set in its context menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewerSettings {
+    /// The strip of the document's pictures along the bottom.
+    pub thumbnails: bool,
+    pub thumb_shape: ThumbShape,
+    /// The thumbnails' height in points, 40 to 160 (the plugin's range).
+    pub thumb_height: u16,
+    /// The ‹ › buttons beside the picture.
+    pub arrows: bool,
+    pub wheel: WheelMode,
+    pub start_zoom: StartZoom,
+}
+
+impl Default for ViewerSettings {
+    fn default() -> Self {
+        ViewerSettings {
+            thumbnails: true,
+            thumb_shape: ThumbShape::Landscape,
+            thumb_height: 64,
+            arrows: true,
+            wheel: WheelMode::Zoom,
+            start_zoom: StartZoom::FitDown,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WindowGeometry {
     pub x: f32,
@@ -129,6 +192,8 @@ pub struct Settings {
     pub find_case: bool,
     /// Find matches whole words only (Alt+W).
     pub find_words: bool,
+    /// The picture viewer's options.
+    pub viewer: ViewerSettings,
 }
 
 impl Default for Settings {
@@ -156,6 +221,7 @@ impl Default for Settings {
             editor: None,
             find_case: false,
             find_words: false,
+            viewer: ViewerSettings::default(),
         }
     }
 }
