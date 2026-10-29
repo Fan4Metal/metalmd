@@ -260,20 +260,47 @@ fn reference_labels(content: &str) -> std::collections::HashSet<String> {
         .collect()
 }
 
-/// Where the front matter that comrak takes (`---` on the first line, up
-/// to the next `---` line) ends, after its closing line's end.
+/// Where the front matter that comrak takes ends, after its closing line's
+/// end: comrak's `split_off_front_matter`, step by step. `---` opens it on
+/// the first line, and it closes at the first `\n---\r\n` anywhere after,
+/// else the first `\n---\n`, else `\n---` at the end; so `---\n---\n` is
+/// not an empty one, and `--- ` with a space closes nothing.
 fn front_matter_end(content: &str) -> Option<usize> {
-    let rest = content
-        .strip_prefix("---\n")
-        .or_else(|| content.strip_prefix("---\r\n"))?;
-    let mut at = content.len() - rest.len();
-    for line in rest.split_inclusive('\n') {
-        at += line.len();
-        if line.trim_end() == "---" {
-            return Some(at);
-        }
+    const DELIMITER: &str = "---";
+    let bom = if content.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+    let s = &content[bom..];
+    if !s.starts_with(DELIMITER) {
+        return None;
     }
-    None
+    let mut start = DELIMITER.len();
+    if s[start..].starts_with('\n') {
+        start += 1;
+    } else if s[start..].starts_with("\r\n") {
+        start += 2;
+    } else {
+        return None;
+    }
+    let rest = &s[start..];
+    let found = rest
+        .find("\n---\r\n")
+        .or_else(|| rest.find("\n---\n"))
+        .or_else(|| rest.find("\n---"))?;
+    start += found + 1 + DELIMITER.len();
+    if start == s.len() {
+        return Some(bom + start);
+    }
+    if s[start..].starts_with('\n') {
+        start += 1;
+    } else if s[start..].starts_with("\r\n") {
+        start += 2;
+    } else {
+        return None;
+    }
+    Some(bom + start)
 }
 
 /// Byte ranges of code regions (fenced and indented code blocks, inline code
@@ -1375,6 +1402,35 @@ mod tests {
         // Not front matter: `---` later, or no closing line.
         assert!(preprocess("text\n---\n[[a]]\n---\n").contains("[a](a.md)"));
         assert!(preprocess("---\n[[a]]\n").contains("[a](a.md)"));
+    }
+
+    #[test]
+    fn front_matter_ends_where_comrak_ends_it() {
+        let comrak_end = |text: &str| {
+            let arena = comrak::Arena::new();
+            let root = comrak::parse_document(&arena, text, &markdown_options());
+            root.children().find_map(|node| match &node.data().value {
+                comrak::nodes::NodeValue::FrontMatter(raw) => Some(raw.len()),
+                _ => None,
+            })
+        };
+        for text in [
+            "---\na: 1\n---\nbody\n",
+            "---\r\na: 1\r\n---\r\nbody\r\n",
+            "---\na: 1\n---",
+            "---\n---\n# T\n[[N]]\n\n---\nmore\n",
+            "---\na: 1\n--- \nb\n---\nc\n",
+            "---\na\n---\r\nb\n---\nc\n",
+            "---\na\n----\nb\n",
+            "---\nno end\n",
+            "text\n---\na\n---\n",
+        ] {
+            assert_eq!(front_matter_end(text), comrak_end(text), "{text:?}");
+        }
+        // comrak's front matter leaves a byte order mark out; the end is
+        // still a place in the text.
+        let marked = "\u{feff}---\na: 1\n---\nbody\n";
+        assert_eq!(front_matter_end(marked), comrak_end(marked).map(|n| n + 3));
     }
 
     #[test]
