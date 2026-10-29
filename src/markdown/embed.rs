@@ -26,7 +26,8 @@ const MAX_EMBEDS: usize = 64;
 /// `path`.
 pub fn fill(doc: &mut Document, path: &Path) {
     let mut budget = MAX_EMBEDS;
-    fill_in(doc, path, &mut vec![path.to_path_buf()], &mut budget);
+    let chain = &mut vec![crate::app::normalize_path(path)];
+    fill_in(doc, path, chain, &mut budget);
 }
 
 /// Whether `doc` has note embeds for [`fill`] to fill.
@@ -154,7 +155,9 @@ fn load(
         crate::vault::locate_now(base, &decoded)
             .ok_or_else(|| tr!("The note is not found", "Заметка не найдена").to_owned())?
     };
-    if chain.contains(&file) {
+    // `../notes/A.md` and `a.md` may be one file.
+    let file = crate::app::normalize_path(&file);
+    if chain.iter().any(|f| crate::settings::same_path(f, &file)) {
         return Err(tr!("The note embeds itself", "Заметка вставляет сама себя").to_owned());
     }
     if chain.len() > MAX_DEPTH || *budget == 0 {
@@ -476,9 +479,10 @@ mod tests {
             &[
                 (
                     "a.md",
-                    "![[gone]]\n\n![[a]]\n\n![[b#Nowhere]]\n\n![[b]]\n\n![[//evil/share/n]]\n",
+                    "![[gone]]\n\n![[a]]\n\n![[b#Nowhere]]\n\n![[b]]\n\n![[//evil/share/n]]\n\n![[A]]\n\n![[sub/../a]]\n",
                 ),
                 ("b.md", "# B\n\n![[a]]\n"),
+                ("sub/x.md", "x\n"),
             ],
         );
         let path = root.join("a.md");
@@ -505,6 +509,10 @@ mod tests {
                 "Заметка на другом компьютере"
             )
         );
+        // The document itself, named otherwise.
+        let itself = tr!("The note embeds itself", "Заметка вставляет сама себя");
+        assert_eq!(content(&doc, 5).as_ref().unwrap_err(), itself);
+        assert_eq!(content(&doc, 6).as_ref().unwrap_err(), itself);
         let _ = std::fs::remove_dir_all(&root);
     }
 
