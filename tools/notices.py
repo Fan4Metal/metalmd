@@ -171,8 +171,9 @@ def normalized(text: str) -> str:
 
 
 def license_texts(package):
-    """(file name, text) of the crate's licences: of an `A OR MIT` choice, the
-    MIT text alone when there is one; NOTICE files always."""
+    """(file name, text) of the crate's licences: of an `A OR B` choice, the
+    MIT text alone when there is one, else the Apache one (`Apache-2.0 OR
+    GPL-2.0-only`, `BSD-3-Clause OR Apache-2.0`); NOTICE files always."""
     folder = Path(package["manifest_path"]).parent
     files = sorted(f for f in folder.iterdir() if f.is_file() and LICENSE_FILE.match(f.name))
     if package.get("license_file"):
@@ -180,15 +181,17 @@ def license_texts(package):
         if extra.is_file() and extra not in files:
             files.append(extra)
     expression = package.get("license") or ""
-    mit_choice = re.search(r"\bMIT\b", expression) and " OR " in expression.replace("/", " OR ")
-    if mit_choice:
-        mit = [f for f in files if "MIT" in f.name.upper()]
-        if mit and " AND " in expression:
-            # "(MIT OR Apache-2.0) AND Unicode-3.0": the MIT text, and the
-            # licence that is not a choice (all but the Apache one).
-            files = mit + [f for f in files if f not in mit and "APACHE" not in f.name.upper()]
-        elif mit:
-            files = mit + [f for f in files if f.name.upper().startswith("NOTICE") and f not in mit]
+    choice = " OR " in expression.replace("/", " OR ")
+    chosen = []
+    for tag, spdx in [("MIT", r"\bMIT\b"), ("APACHE", r"\bApache-2\.0\b")]:
+        if choice and not chosen and re.search(spdx, expression):
+            chosen = [f for f in files if tag in f.name.upper()]
+    if chosen and " AND " in expression:
+        # "(MIT OR Apache-2.0) AND Unicode-3.0": the MIT text, and the
+        # licence that is not a choice (all but the Apache one).
+        files = chosen + [f for f in files if f not in chosen and "APACHE" not in f.name.upper()]
+    elif chosen:
+        files = chosen + [f for f in files if f.name.upper().startswith("NOTICE") and f not in chosen]
     texts = [(f.name, f.read_text(encoding="utf-8", errors="replace").strip()) for f in files]
     if not texts:
         authors = ", ".join(a.split("<")[0].strip() for a in package.get("authors") or []) or (
