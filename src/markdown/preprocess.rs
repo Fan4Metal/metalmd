@@ -37,6 +37,9 @@ static BLOCK_ID_RE: LazyLock<Regex> =
 /// Title marker carried by a rewritten embed so the renderer can apply the
 /// requested size: `![alt](src "qmd-size:300x200")`.
 pub const EMBED_SIZE_TITLE_PREFIX: &str = "qmd-size:";
+/// Title of the Markdown image a note embed (`![[Note]]`) becomes, so the
+/// document builder makes it a `Block::Embed`.
+pub const NOTE_EMBED_TITLE: &str = "qmd-note";
 /// Class of the empty anchor a `^block-id` becomes.
 pub const BLOCK_ID_ANCHOR_CLASS: &str = "block-id-anchor";
 
@@ -656,6 +659,23 @@ fn internal_embeds<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a,
         if path.is_empty() {
             return caps[0].to_owned();
         }
+        // A note, or a part of one: `![[Note]]`, `![[Note#Heading]]`,
+        // `![[Note#^block]]`. Its title names it.
+        let (file, part) = path.split_once('#').unwrap_or((path, ""));
+        let (file, part) = (file.trim(), part.trim());
+        if link_path_extension(file).is_none_or(|_| is_markdown_path(file)) {
+            if file.is_empty() {
+                return caps[0].to_owned();
+            }
+            let mut src = note_destination(file);
+            let mut title = file.to_owned();
+            if !part.is_empty() {
+                src = format!("{src}#{}", heading_anchor_id(part));
+                title = format!("{file} > {part}");
+            }
+            let alt = escape_markdown_text(&title);
+            return format!("![{alt}]({src} \"{NOTE_EMBED_TITLE}\")");
+        }
         let size = parts
             .next()
             .map(str::trim)
@@ -986,7 +1006,7 @@ mod tests {
         let input = "~~~\n![[inside.md]]\n~~~\n\n![[outside.md]]\n";
         let out = process_internal_embeds(input);
         assert!(out.contains("![[inside.md]]"), "got: {out}");
-        assert!(out.contains("![outside.md](outside.md)"), "got: {out}");
+        assert!(out.contains(r#"![outside.md](outside.md "qmd-note")"#), "got: {out}");
     }
 
     #[test]
@@ -994,7 +1014,7 @@ mod tests {
         let input = "````\n```\n![[still-code.md]]\n````\n![[after.md]]\n";
         let out = process_internal_embeds(input);
         assert!(out.contains("![[still-code.md]]"), "got: {out}");
-        assert!(out.contains("![after.md](after.md)"), "got: {out}");
+        assert!(out.contains(r#"![after.md](after.md "qmd-note")"#), "got: {out}");
     }
 
     #[test]
@@ -1008,7 +1028,7 @@ mod tests {
         let input = "`` a ` ![[in-span.md]] `` then ![[outside.md]]\n";
         let out = process_internal_embeds(input);
         assert!(out.contains("![[in-span.md]]"), "got: {out}");
-        assert!(out.contains("![outside.md](outside.md)"), "got: {out}");
+        assert!(out.contains(r#"![outside.md](outside.md "qmd-note")"#), "got: {out}");
     }
 
     #[test]

@@ -206,6 +206,16 @@ pub enum Block {
         summary: Vec<Inline>,
     },
     DetailsEnd,
+    /// An Obsidian note embed, `![[Note]]` or `![[Note#Heading]]`, alone
+    /// in its paragraph: the note's blocks in a frame of their own.
+    Embed {
+        /// The note's name as written, `Note > Heading` for a part.
+        title: String,
+        /// The link to the note, `#anchor` for a part of it.
+        src: String,
+        /// Filled by `markdown::embed::fill` once the note is read.
+        content: Option<Result<Vec<Block>, String>>,
+    },
 }
 
 /// An entry of the table of contents.
@@ -248,6 +258,8 @@ pub struct Document {
     pub images: Vec<String>,
     pub has_code: bool,
     pub scripts: Scripts,
+    /// The ids given out (`Rich`, code, formulas), embedded notes' too.
+    pub ids: u32,
 }
 
 impl Document {
@@ -326,6 +338,7 @@ impl Document {
             images: builder.images.into_iter().collect(),
             has_code: builder.has_code,
             scripts: detect_scripts(source),
+            ids: builder.next_id,
         };
         (doc, sources)
     }
@@ -797,6 +810,14 @@ impl Builder {
                     let id = self.alloc_id();
                     self.add_search(id, &tex);
                     out.push(Block::Math { id, tex });
+                    return;
+                }
+                if let Some(embeds) = lone_note_embeds(node) {
+                    out.extend(embeds.into_iter().map(|(title, src)| Block::Embed {
+                        title,
+                        src,
+                        content: None,
+                    }));
                     return;
                 }
                 let inlines = self.inlines(node);
@@ -1609,6 +1630,14 @@ impl InlineCtx {
                 drop(data);
                 self.with_link(builder, node, style, url);
             }
+            NodeValue::Image(link) if link.title == preprocess::NOTE_EMBED_TITLE => {
+                // A note embed among other text: a link to the note.
+                let url = link.url.clone();
+                drop(data);
+                let saved = self.link.replace(url);
+                self.push_text(&collect_text(node), style);
+                self.link = saved;
+            }
             NodeValue::Image(link) => {
                 let src = link.url.clone();
                 let title = link.title.clone();
@@ -1813,6 +1842,23 @@ fn strip_front_matter_fences(raw: &str) -> String {
         lines.pop();
     }
     lines.join("\n")
+}
+
+/// The (title, src) of each note embed of a paragraph made of nothing
+/// else (`![[A]]` lines one after another), or `None`.
+fn lone_note_embeds<'a>(node: Node<'a>) -> Option<Vec<(String, String)>> {
+    let mut found = Vec::new();
+    for child in node.children() {
+        match &child.data().value {
+            NodeValue::Image(link) if link.title == preprocess::NOTE_EMBED_TITLE => {
+                found.push((collect_text(child), link.url.clone()));
+            }
+            NodeValue::SoftBreak | NodeValue::LineBreak => {}
+            NodeValue::Text(t) if t.trim().is_empty() => {}
+            _ => return None,
+        }
+    }
+    (!found.is_empty()).then_some(found)
 }
 
 /// The TeX of a paragraph that is nothing but one `$$ … $$` span.

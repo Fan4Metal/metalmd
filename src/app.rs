@@ -182,7 +182,8 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
         not_found: e.kind() == std::io::ErrorKind::NotFound,
         is_dir: path.is_dir(),
     })?;
-    let doc = Document::parse(&decoded.content);
+    let mut doc = Document::parse(&decoded.content);
+    crate::markdown::embed::fill(&mut doc, path);
     Ok(Loaded {
         doc: Arc::new(doc),
         encoding: decoded.encoding,

@@ -80,7 +80,11 @@ fn code_blocks(blocks: &[Block]) -> Vec<(&str, &str)> {
                 }
                 Block::Quote(blocks)
                 | Block::Alert { blocks, .. }
-                | Block::Footnote { blocks, .. } => walk(blocks, out),
+                | Block::Footnote { blocks, .. }
+                | Block::Embed {
+                    content: Some(Ok(blocks)),
+                    ..
+                } => walk(blocks, out),
                 Block::List { items, .. } => {
                     for item in items {
                         walk(&item.blocks, out);
@@ -298,6 +302,21 @@ impl<'d> Writer<'d> {
             }
             Block::Rule => {
                 let _ = writeln!(self.out, "<hr{id_attr}>");
+            }
+            Block::Embed { title, content, .. } => {
+                let _ = writeln!(
+                    self.out,
+                    "<div class=\"embed\"{id_attr}>\n<p class=\"embed-title\">{}</p>",
+                    escape(title)
+                );
+                match content {
+                    Some(Ok(blocks)) => self.blocks(blocks),
+                    Some(Err(problem)) => {
+                        let _ = writeln!(self.out, "<p class=\"missing\">{}</p>", escape(problem));
+                    }
+                    None => {}
+                }
+                self.out.push_str("</div>\n");
             }
             Block::Details {
                 index,
@@ -716,6 +735,8 @@ img { max-width: 100%; border: 0; }
 img[width] { height: auto; }
 .alert { padding: .5em 1em; border-left: .25em solid var(--alert); }
 .alert-title { margin: 0 0 .5em; font-weight: 600; color: var(--alert); }
+.embed { padding: 0 1em; border-left: .25em solid $BORDER; }
+.embed-title { margin: 0 0 .5em; font-size: .85em; color: $MUTED; }
 .alert-note { --alert: #0969da; }
 .alert-tip { --alert: #1a7f37; }
 .alert-important { --alert: #8250df; }

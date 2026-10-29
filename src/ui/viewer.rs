@@ -776,6 +776,11 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
                 draw_blocks(ui, blocks, rc, block_gap(), salt);
             });
         }
+        Block::Embed {
+            title,
+            src,
+            content,
+        } => draw_embed(ui, title, src, content.as_ref(), rc, salt),
         Block::Alert {
             kind,
             title,
@@ -878,6 +883,47 @@ fn indented<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     result
 }
 
+/// An embedded note: its name over its blocks, beside a bar in the accent
+/// colour, as Obsidian frames one. A click on the name opens the note.
+fn draw_embed(
+    ui: &mut Ui,
+    title: &str,
+    src: &str,
+    content: Option<&Result<Vec<Block>, String>>,
+    rc: &mut RenderCtx<'_>,
+    salt: u64,
+) {
+    let bar = rc.palette.accent.gamma_multiply(0.6);
+    let muted = rc.palette.muted;
+    let link = rc.palette.link;
+    draw_barred(ui, bar, |ui| {
+        let name = egui::RichText::new(title)
+            .color(link)
+            .size(body_size() * 0.85);
+        let (pos, galley, response) = Label::new(name).selectable(true).layout_in_ui(ui);
+        if ui.is_rect_visible(response.rect) {
+            selection::label(ui, &response, pos, galley, link, Stroke::NONE);
+        }
+        let response = response.on_hover_cursor(CursorIcon::PointingHand);
+        if response.clicked() {
+            rc.actions.push(ViewAction::OpenLink(src.to_owned()));
+        }
+        text_menu(&response, rc, false);
+        ui.add_space(4.0);
+        match content {
+            Some(Ok(blocks)) => draw_blocks(ui, blocks, rc, block_gap(), salt),
+            Some(Err(problem)) => {
+                let text = egui::RichText::new(problem).color(muted).italics();
+                let (pos, galley, response) = Label::new(text).selectable(true).layout_in_ui(ui);
+                if ui.is_rect_visible(response.rect) {
+                    selection::label(ui, &response, pos, galley, muted, Stroke::NONE);
+                }
+            }
+            None => {}
+        }
+    });
+}
+
 fn draw_barred(ui: &mut Ui, color: Color32, add: impl FnOnce(&mut Ui)) {
     if indents(ui) >= MAX_INDENTS {
         ui.vertical(|ui| indented(ui, add));
@@ -948,13 +994,23 @@ fn draw_list(
                         pos2(marker.right() - side / 2.0 - 6.0, center_y),
                         vec2(side, side),
                     );
-                    let response = ui
-                        .interact(
-                            rect.expand(3.0),
-                            ui.id().with(("task", task.line, task.column)),
-                            Sense::click(),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    // Line 0: an embedded note's, which cannot be ticked
+                    // from here (`markdown::embed`).
+                    let editable = task.line > 0;
+                    let response = ui.interact(
+                        rect.expand(3.0),
+                        ui.id().with(("task", task.line, task.column)),
+                        if editable {
+                            Sense::click()
+                        } else {
+                            Sense::hover()
+                        },
+                    );
+                    let response = if editable {
+                        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+                    } else {
+                        response
+                    };
                     if response.clicked() {
                         rc.actions.push(ViewAction::ToggleTask(task));
                     }
@@ -2391,6 +2447,13 @@ fn estimate(block: &Block, width: f32) -> f32 {
         Block::Rule => body_size() + gap,
         Block::Details { .. } => line + gap,
         Block::DetailsEnd => 0.0,
+        Block::Embed { content, .. } => {
+            let inner = match content {
+                Some(Ok(blocks)) => blocks.iter().map(|b| estimate(b, width - 40.0)).sum(),
+                _ => line,
+            };
+            line + inner + gap
+        }
     }
 }
 

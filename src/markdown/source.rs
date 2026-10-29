@@ -191,6 +191,8 @@ pub enum Problem {
     Changed,
     /// The selection cannot be highlighted (or shows no highlight).
     Cannot,
+    /// The selection is in an embedded note, another file.
+    Embedded,
 }
 
 impl Problem {
@@ -203,6 +205,10 @@ impl Problem {
             Problem::Cannot => tr!(
                 "This text cannot be highlighted here.",
                 "Этот текст здесь нельзя выделить цветом."
+            ),
+            Problem::Embedded => tr!(
+                "This text is in an embedded note, another file.",
+                "Этот текст во вставленной заметке, в другом файле."
             ),
         }
         .to_owned()
@@ -219,6 +225,12 @@ impl<'a> Located<'a> {
     /// Parses `source` with places kept and checks `selection` is in it.
     fn new(source: &'a str, selection: &[Selected]) -> Result<Located<'a>, Problem> {
         let (doc, sources) = Document::parse_with_sources(source);
+        // Ids past the file's own are an embedded note's (`markdown::embed`).
+        if selection.iter().any(|s| match s.part {
+            Part::Text(id) | Part::Code(id) => id >= doc.ids,
+        }) {
+            return Err(Problem::Embedded);
+        }
         let mut digests = HashMap::new();
         each_part(&doc.blocks, &mut |part, text| {
             if selection.iter().any(|s| s.part == part) {
@@ -363,7 +375,8 @@ fn each_part(blocks: &[Block], f: &mut impl FnMut(Part, &str)) {
                     }
                 }
             }
-            Block::Math { .. } | Block::Rule | Block::DetailsEnd => {}
+            // An embedded note's text is another file's.
+            Block::Math { .. } | Block::Rule | Block::DetailsEnd | Block::Embed { .. } => {}
         }
     }
 }
