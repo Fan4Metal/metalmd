@@ -779,7 +779,14 @@ fn wikilinks<'a>(
             let anchor = heading_anchor_id(heading);
 
             if path.is_empty() {
-                return format!("[{}](#{anchor})", alias.unwrap_or(heading));
+                // `[^id](#id)` would be a footnote reference where a
+                // footnote `[^id]` is defined.
+                let text = match alias {
+                    Some(alias) => alias.to_owned(),
+                    None if heading.starts_with('^') => format!("\\{heading}"),
+                    None => heading.to_owned(),
+                };
+                return format!("[{text}](#{anchor})");
             }
 
             let Some(destination) = wikilink_file_destination(path) else {

@@ -3163,6 +3163,34 @@ mod tests {
         assert_eq!(resolve_anchor(&doc, "missing"), None);
     }
 
+    #[test]
+    fn block_links_reach_their_block() {
+        use crate::markdown::document::{Block, Inline};
+        let doc = Document::parse(
+            "# Top\n\nFirst para ^first\n\n- item ^in-list\n\nSee [[#^first]], [[#^in-list|the item]] and [[Other#^x]].\n",
+        );
+        let Some(Block::Paragraph { inlines, .. }) = doc.blocks.last() else {
+            panic!("{:?}", doc.blocks.last())
+        };
+        let Inline::Text(rich) = &inlines[0] else {
+            panic!()
+        };
+        assert_eq!(rich.text, "See ^first, the item and Other > ^x.");
+        assert_eq!(rich.links, ["#first", "#in-list", "Other.md#x"]);
+        assert_eq!(resolve_anchor(&doc, "first"), Some(1));
+        assert_eq!(resolve_anchor(&doc, "in-list"), Some(2));
+        // Not taken for a footnote of the same name.
+        let doc = Document::parse("Para ^first\n\nSee [[#^first]].[^first]\n\n[^first]: A note.\n");
+        let Block::Paragraph { inlines, .. } = &doc.blocks[1] else {
+            panic!("{:?}", doc.blocks[1])
+        };
+        let Inline::Text(rich) = &inlines[0] else {
+            panic!()
+        };
+        assert!(rich.text.starts_with("See ^first."), "{}", rich.text);
+        assert_eq!(rich.links[0], "#first");
+    }
+
     #[cfg(windows)]
     #[test]
     fn paths_are_made_absolute_and_keep_their_drive() {
