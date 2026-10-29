@@ -308,7 +308,16 @@ impl<'d> Writer<'d> {
                     let values = property
                         .values
                         .iter()
-                        .map(|v| escape(v).replace('\n', "<br>"))
+                        .map(|v| {
+                            let (text, link) = crate::markdown::properties::value_link(v);
+                            let text = escape(&text).replace('\n', "<br>");
+                            match link {
+                                Some(link) => {
+                                    format!("<a href=\"{}\">{text}</a>", escape(&self.href(&link)))
+                                }
+                                None => text,
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join(", ");
                     let _ = writeln!(
@@ -339,10 +348,15 @@ impl<'d> Writer<'d> {
 ",
                 );
             }
-            Block::Embed { title, content, .. } => {
+            Block::Embed {
+                title,
+                src,
+                content,
+            } => {
                 let _ = writeln!(
                     self.out,
-                    "<div class=\"embed\"{id_attr}>\n<p class=\"embed-title\">{}</p>",
+                    "<div class=\"embed\"{id_attr}>\n<p class=\"embed-title\"><a href=\"{}\">{}</a></p>",
+                    escape(&self.href(src)),
                     escape(title)
                 );
                 match content {
@@ -876,6 +890,22 @@ mod tests {
         let page = html("<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>\n");
         assert!(!page.contains("<script>alert"));
         assert!(!page.contains("onerror"));
+    }
+
+    #[test]
+    fn linked_properties_and_embed_titles_are_links() {
+        let page =
+            html("---\nup: \"[[Home|start]]\"\nsite: https://example.com\nn: 5\n---\n\n![[b]]\n");
+        assert!(
+            page.contains("<a href=\"file:///C:/docs/my%20notes/Home.md\">start</a>"),
+            "{page}"
+        );
+        assert!(page.contains("<a href=\"https://example.com\">https://example.com</a>"));
+        assert!(page.contains("<td>5</td>"), "{page}");
+        assert!(
+            page.contains("<a href=\"file:///C:/docs/my%20notes/b.md\">b</a>"),
+            "{page}"
+        );
     }
 
     #[test]

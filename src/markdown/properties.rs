@@ -14,6 +14,30 @@ pub struct Property {
     pub list: bool,
 }
 
+/// What a value shows and where it links: `[[Note]]` and `[[Note|alias]]`
+/// to the note, a web address to itself, anything else nowhere.
+pub fn value_link(value: &str) -> (String, Option<String>) {
+    let wikilink = value
+        .strip_prefix("[[")
+        .and_then(|v| v.strip_suffix("]]"))
+        .filter(|v| !v.contains(['[', ']']));
+    match wikilink {
+        Some(inner) => {
+            let (target, alias) = inner.split_once('|').unwrap_or((inner, inner));
+            let (file, part) = target.split_once('#').unwrap_or((target, ""));
+            let mut link = super::preprocess::note_destination(file.trim());
+            if !part.trim().is_empty() {
+                link = format!("{link}#{}", super::preprocess::heading_anchor_id(part));
+            }
+            (alias.trim().to_owned(), Some(link))
+        }
+        None if value.starts_with("http://") || value.starts_with("https://") => {
+            (value.to_owned(), Some(value.to_owned()))
+        }
+        None => (value.to_owned(), None),
+    }
+}
+
 /// The properties of front matter `yaml` (without the `---` fences).
 pub fn parse(yaml: &str) -> Option<Vec<Property>> {
     let lines: Vec<&str> = yaml.lines().collect();

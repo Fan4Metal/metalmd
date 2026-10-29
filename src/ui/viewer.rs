@@ -1137,29 +1137,7 @@ fn draw_properties(
 }
 
 fn draw_property_value(ui: &mut Ui, value: &str, chip: bool, size: f32, rc: &mut RenderCtx<'_>) {
-    // `[[Note]]`, `[[Note|alias]]`, or a web address.
-    let wikilink = value
-        .strip_prefix("[[")
-        .and_then(|v| v.strip_suffix("]]"))
-        .filter(|v| !v.contains(['[', ']']));
-    let (text, link) = match wikilink {
-        Some(inner) => {
-            let (target, alias) = inner.split_once('|').unwrap_or((inner, inner));
-            let (file, part) = target.split_once('#').unwrap_or((target, ""));
-            let mut link = crate::markdown::preprocess::note_destination(file.trim());
-            if !part.trim().is_empty() {
-                link = format!(
-                    "{link}#{}",
-                    crate::markdown::preprocess::heading_anchor_id(part)
-                );
-            }
-            (alias.trim().to_owned(), Some(link))
-        }
-        None if value.starts_with("http://") || value.starts_with("https://") => {
-            (value.to_owned(), Some(value.to_owned()))
-        }
-        None => (value.to_owned(), None),
-    };
+    let (text, link) = crate::markdown::properties::value_link(value);
     let color = if link.is_some() {
         rc.palette.link
     } else {
