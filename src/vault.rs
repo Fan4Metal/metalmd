@@ -300,8 +300,11 @@ pub fn link_missing(folder: &Path, target: &str, ctx: &egui::Context) -> bool {
             .spawn(move || {
                 for (folder, path) in receiver {
                     let decoded = crate::markdown::preprocess::percent_decode(&path);
-                    let found =
-                        folder.join(&decoded).exists() || locate_now(&folder, &decoded).is_some();
+                    let here = folder.join(&decoded);
+                    // Not asked, as Windows would sign in to that computer.
+                    let found = crate::ui::confirm::on_another_host(&here, Some(&folder))
+                        || here.exists()
+                        || locate_now(&folder, &decoded).is_some();
                     checks()
                         .entry(folder)
                         .or_default()

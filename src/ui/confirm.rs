@@ -96,9 +96,7 @@ pub fn risk(target: &LinkTarget, document: Option<&Path>) -> Option<Risk> {
         }
         LinkTarget::Markdown(path, _) | LinkTarget::File(path) => path,
     };
-    if let Some(host) = network_host(path)
-        && document.and_then(network_host) != Some(host)
-    {
+    if on_another_host(path, document) {
         return Some(Risk::Network);
     }
     let runnable = matches!(target, LinkTarget::File(_))
@@ -118,6 +116,13 @@ pub fn network_host(path: &Path) -> Option<String> {
     // `\\?\C:\…` and `\\.\…` are local device paths, not hosts.
     let host = rest.split(['\\', '/']).next()?;
     (!host.is_empty() && host != "?" && host != ".").then(|| host.to_ascii_lowercase())
+}
+
+/// Whether `path` is on another computer of the network than `here` (the
+/// document's file or folder). Windows reaches one by sending it the
+/// user's credentials, which a document must not do by being opened.
+pub fn on_another_host(path: &Path, here: Option<&Path>) -> bool {
+    network_host(path).is_some_and(|host| here.and_then(network_host) != Some(host))
 }
 
 /// The dialog asking whether to open a risky target.
@@ -258,5 +263,10 @@ mod tests {
             Some(Risk::Program)
         );
         assert_eq!(network_host(Path::new(r"\\?\C:\a")), None);
+        assert!(!on_another_host(Path::new(r"\\server\docs\a.md"), doc));
+        assert!(on_another_host(Path::new("//other/docs/a.md"), doc));
+        let local = Some(Path::new(r"C:\docs"));
+        assert!(on_another_host(Path::new("//other/docs/a.md"), local));
+        assert!(!on_another_host(Path::new(r"C:\docs\a.md"), None));
     }
 }

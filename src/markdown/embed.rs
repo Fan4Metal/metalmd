@@ -121,6 +121,13 @@ fn load(
     };
     let decoded = percent_decode(file);
     let here = base.join(&decoded);
+    if crate::ui::confirm::on_another_host(&here, Some(base)) {
+        return Err(tr!(
+            "The note is on another computer",
+            "Заметка на другом компьютере"
+        )
+        .to_owned());
+    }
     let file = if here.is_file() {
         here
     } else {
@@ -426,7 +433,10 @@ mod tests {
         let root = vault(
             "errors",
             &[
-                ("a.md", "![[gone]]\n\n![[a]]\n\n![[b#Nowhere]]\n\n![[b]]\n"),
+                (
+                    "a.md",
+                    "![[gone]]\n\n![[a]]\n\n![[b#Nowhere]]\n\n![[b]]\n\n![[//evil/share/n]]\n",
+                ),
                 ("b.md", "# B\n\n![[a]]\n"),
             ],
         );
@@ -446,6 +456,14 @@ mod tests {
             panic!("{b:?}")
         };
         assert!(inner.is_err());
+        // Never read from another computer: Windows would sign in to it.
+        assert_eq!(
+            content(&doc, 4).as_ref().unwrap_err(),
+            tr!(
+                "The note is on another computer",
+                "Заметка на другом компьютере"
+            )
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
