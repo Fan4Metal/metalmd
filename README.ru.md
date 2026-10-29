@@ -235,8 +235,8 @@ python tools/make_release.py --install    # затем тихая установ
 Релизы на GitHub собирает workflow **Release** (`.github/workflows/release.yml`). Обновите версию в `Cargo.toml`, закоммитьте её и отправьте тег с той же версией. Workflow опубликует релиз с инсталлятором и портативным архивом:
 
 ```
-git tag v0.2.4
-git push origin v0.2.4
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 Ручной запуск workflow (Actions → Release → Run workflow) только собирает файлы и прикладывает их к запуску, без релиза.
