@@ -329,6 +329,16 @@ impl<'d> Writer<'d> {
             Block::Rule => {
                 let _ = writeln!(self.out, "<hr{id_attr}>");
             }
+            Block::Gallery { images, .. } => {
+                let _ = writeln!(self.out, "<div class=\"gallery\"{id_attr}>");
+                for image in images {
+                    self.image(image);
+                }
+                self.out.push_str(
+                    "</div>
+",
+                );
+            }
             Block::Embed { title, content, .. } => {
                 let _ = writeln!(
                     self.out,
@@ -775,6 +785,8 @@ img { max-width: 100%; border: 0; }
 img[width] { height: auto; }
 .alert { padding: .5em 1em; border-left: .25em solid var(--alert); }
 .alert-title { margin: 0 0 .5em; font-weight: 600; color: var(--alert); }
+.gallery { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 16px; }
+.gallery img { height: 12em; width: auto; max-width: 100%; object-fit: cover; border-radius: 6px; }
 .embed { padding: 0 1em; border-left: .25em solid $BORDER; }
 .task-mark { display: inline-block; width: 1em; height: 1em; line-height: 1em; margin-right: .3em; text-align: center; font-size: .85em; border: 1px solid $MUTED; border-radius: 3px; color: $MUTED; }
 .tag { color: $LINK; background: #ddf4ff; border-radius: 1em; padding: 0 .4em; }

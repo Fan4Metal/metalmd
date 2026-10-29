@@ -254,6 +254,14 @@ fn rebase(blocks: &mut [Block], offset: u32, file: &Path, images: &mut Vec<Strin
                     rebase(blocks, offset, file, images);
                 }
             }
+            Block::Gallery { images: list, .. } => {
+                for image in list {
+                    image.src = absolute(&image.src, file);
+                    if !images.contains(&image.src) {
+                        images.push(image.src.clone());
+                    }
+                }
+            }
             Block::Rule | Block::DetailsEnd => {}
         }
     }

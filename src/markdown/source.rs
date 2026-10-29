@@ -376,7 +376,11 @@ fn each_part(blocks: &[Block], f: &mut impl FnMut(Part, &str)) {
                 }
             }
             // An embedded note's text is another file's.
-            Block::Math { .. } | Block::Rule | Block::DetailsEnd | Block::Embed { .. } => {}
+            Block::Math { .. }
+            | Block::Rule
+            | Block::DetailsEnd
+            | Block::Embed { .. }
+            | Block::Gallery { .. } => {}
         }
     }
 }

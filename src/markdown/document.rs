@@ -225,6 +225,13 @@ pub enum Block {
         summary: Vec<Inline>,
     },
     DetailsEnd,
+    /// A `> [!gallery]` callout of the reader's Media Gallery plugin, made
+    /// of pictures only: justified rows of them, or with `gallery-masonry`
+    /// columns.
+    Gallery {
+        masonry: bool,
+        images: Vec<ImageRef>,
+    },
     /// An Obsidian note embed, `![[Note]]` or `![[Note#Heading]]`, alone
     /// in its paragraph: the note's blocks in a frame of their own.
     Embed {
@@ -908,9 +915,20 @@ impl Builder {
             }
             NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => {
                 drop(data);
-                if let Some((kind, title, fold)) = take_callout(node) {
-                    let fold = fold.map(|open| self.fold(open));
+                if let Some((kind, title, fold, name)) = take_callout(node) {
                     let blocks = self.children_blocks(node);
+                    // The reader's Media Gallery plugin: a callout of
+                    // pictures only, laid out in rows or columns.
+                    if let Some(masonry) = match name.as_str() {
+                        "gallery" => Some(false),
+                        "gallery-masonry" => Some(true),
+                        _ => None,
+                    } && let Some(images) = gallery_images(&blocks)
+                    {
+                        out.push(Block::Gallery { masonry, images });
+                        return;
+                    }
+                    let fold = fold.map(|open| self.fold(open));
                     out.push(Block::Alert {
                         kind,
                         title,
@@ -1971,6 +1989,25 @@ fn find_tag(text: &str, before: Option<char>) -> Option<Range<usize>> {
     None
 }
 
+/// The pictures of a callout's blocks if they are paragraphs of nothing
+/// else (white space and line breaks aside), else `None`.
+fn gallery_images(blocks: &[Block]) -> Option<Vec<ImageRef>> {
+    let mut images = Vec::new();
+    for block in blocks {
+        let Block::Paragraph { inlines, .. } = block else {
+            return None;
+        };
+        for inline in inlines {
+            match inline {
+                Inline::Image(image) => images.push(image.clone()),
+                Inline::Text(rich) if rich.text.trim().is_empty() => {}
+                Inline::Text(_) => return None,
+            }
+        }
+    }
+    (!images.is_empty()).then_some(images)
+}
+
 /// The (title, src) of each note embed of a paragraph made of nothing
 /// else (`![[A]]` lines one after another), or `None`.
 fn lone_note_embeds<'a>(node: Node<'a>) -> Option<Vec<(String, String)>> {
@@ -2010,8 +2047,9 @@ fn lone_display_math<'a>(node: Node<'a>) -> Option<String> {
 /// first line is `[!type]`, `[!type]-` or `[!type]+`, then an optional
 /// title. That line is taken out of the quote, and the callout comes back
 /// as the GitHub alert nearest in colour, titled with its type unless it
-/// has a title of its own, with its fold mark ([`fold_mark`]).
-fn take_callout<'a>(quote: Node<'a>) -> Option<(AlertKind, String, Option<bool>)> {
+/// has a title of its own, with its fold mark ([`fold_mark`]) and its type
+/// in lower case.
+fn take_callout<'a>(quote: Node<'a>) -> Option<(AlertKind, String, Option<bool>, String)> {
     let paragraph = quote.first_child()?;
     if !matches!(paragraph.data().value, NodeValue::Paragraph) {
         return None;
@@ -2057,7 +2095,7 @@ fn take_callout<'a>(quote: Node<'a>) -> Option<(AlertKind, String, Option<bool>)
     for inline in line {
         inline.detach();
     }
-    Some((callout_kind(kind), title, fold))
+    Some((callout_kind(kind), title, fold, kind.to_ascii_lowercase()))
 }
 
 /// Obsidian's fold mark after a callout's type: `-` folded, `+` open but
@@ -2824,6 +2862,24 @@ mod tests {
             .map(|s| (&rich.text[s.range.clone()], s.style.has(Style::DISPLAY)))
             .collect();
         assert_eq!(maths, vec![("a", false), ("b", false), ("c", true)]);
+    }
+
+    #[test]
+    fn gallery_callouts_of_pictures_are_galleries() {
+        let doc = Document::parse(
+            "> [!gallery]\n> ![a](a.png)\n> ![b](b.png)\n>\n> ![c](c.png)\n\n> [!gallery-masonry]\n> ![d](d.png)\n\n> [!gallery]\n> text ![e](e.png)\n",
+        );
+        let galleries: Vec<(bool, usize)> = doc
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Gallery { masonry, images } => Some((*masonry, images.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(galleries, [(false, 3), (true, 1)]);
+        // With text in it, a callout as any other.
+        assert!(matches!(doc.blocks[2], Block::Alert { .. }));
     }
 
     #[test]

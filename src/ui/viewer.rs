@@ -799,6 +799,7 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             src,
             content,
         } => draw_embed(ui, title, src, content.as_ref(), rc, salt),
+        Block::Gallery { masonry, images } => draw_gallery(ui, *masonry, images, rc),
         Block::Alert {
             kind,
             title,
@@ -940,6 +941,139 @@ fn indented<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let result = add(ui);
     ui.data_mut(|d| d.insert_temp(Id::new("indents"), depth));
     result
+}
+
+/// The Media Gallery plugin's defaults: the gap between pictures, the
+/// height a row aims at (at the default text size) and the columns of a
+/// masonry gallery.
+const GALLERY_GAP: f32 = 5.0;
+const GALLERY_ROW: f32 = 300.0;
+const GALLERY_COLUMNS: usize = 3;
+
+/// Justified rows, as the plugin lays out `[!gallery]`: pictures of the
+/// given aspects (width / height) side by side at one height, each row as
+/// wide as `width`, aiming at `target`; the last row, if short, keeps the
+/// target height. Rectangles from the top left.
+fn justified_rows(aspects: &[f32], width: f32, target: f32, gap: f32) -> Vec<Rect> {
+    let mut rects = Vec::with_capacity(aspects.len());
+    let mut y = 0.0;
+    let mut start = 0;
+    while start < aspects.len() {
+        let mut end = start;
+        let mut sum = 0.0;
+        let mut full = false;
+        while end < aspects.len() {
+            sum += aspects[end];
+            end += 1;
+            if sum * target + gap * (end - start - 1) as f32 >= width {
+                full = true;
+                break;
+            }
+        }
+        let gaps = gap * (end - start - 1) as f32;
+        let height = if full { (width - gaps) / sum } else { target };
+        let mut x = 0.0;
+        for aspect in &aspects[start..end] {
+            let w = aspect * height;
+            rects.push(Rect::from_min_size(pos2(x, y), vec2(w, height)));
+            x += w + gap;
+        }
+        y += height + gap;
+        start = end;
+    }
+    rects
+}
+
+/// Columns, as the plugin lays out `[!gallery-masonry]`: each picture at
+/// the column's width, under the shortest column so far.
+fn masonry_columns(aspects: &[f32], width: f32, columns: usize, gap: f32) -> Vec<Rect> {
+    let columns = columns.clamp(1, aspects.len().max(1));
+    let column = (width - gap * (columns - 1) as f32) / columns as f32;
+    let mut bottoms = vec![0.0f32; columns];
+    aspects
+        .iter()
+        .map(|aspect| {
+            let (index, top) = bottoms
+                .iter()
+                .copied()
+                .enumerate()
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .unwrap_or((0, 0.0));
+            let height = column / aspect;
+            bottoms[index] = top + height + gap;
+            Rect::from_min_size(
+                pos2(index as f32 * (column + gap), top),
+                vec2(column, height),
+            )
+        })
+        .collect()
+}
+
+/// A gallery callout: its pictures in justified rows or masonry columns,
+/// each shown on its own with a click. A picture not loaded yet takes 4:3.
+fn draw_gallery(ui: &mut Ui, masonry: bool, images: &[ImageRef], rc: &mut RenderCtx<'_>) {
+    let width = ui.available_width();
+    let items: Vec<(Option<String>, f32)> = images
+        .iter()
+        .map(|image| {
+            let (uri, waiting) = image_source(ui.ctx(), &image.src, rc.base_dir);
+            rc.pending |= waiting;
+            let aspect = uri
+                .as_ref()
+                .and_then(|uri| {
+                    let shown = super::animation::frame_uri(ui.ctx(), uri).unwrap_or(uri.clone());
+                    match egui::Image::new(shown).load_for_size(ui.ctx(), Vec2::INFINITY) {
+                        Ok(egui::load::TexturePoll::Ready { texture }) => Some(texture.size),
+                        Ok(egui::load::TexturePoll::Pending { size }) => size,
+                        Err(_) => None,
+                    }
+                })
+                .filter(|size| size.x > 0.0 && size.y > 0.0)
+                .map_or(4.0 / 3.0, |size| size.x / size.y);
+            (uri, aspect)
+        })
+        .collect();
+    let aspects: Vec<f32> = items.iter().map(|(_, a)| *a).collect();
+    let rects = if masonry {
+        masonry_columns(&aspects, width, GALLERY_COLUMNS, GALLERY_GAP)
+    } else {
+        justified_rows(
+            &aspects,
+            width,
+            GALLERY_ROW * body_size() / 16.0,
+            GALLERY_GAP,
+        )
+    };
+    let height = rects.iter().map(|r| r.bottom()).fold(0.0, f32::max);
+    let (area, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    for (((uri, _), rect), image) in items.iter().zip(&rects).zip(images) {
+        let rect = rect.translate(area.min.to_vec2());
+        if !ui.is_rect_visible(rect) {
+            continue;
+        }
+        let Some(uri) = uri else {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(6), rc.palette.code_bg);
+            continue;
+        };
+        let shown = super::animation::frame_uri(ui.ctx(), uri).unwrap_or(uri.clone());
+        let widget = egui::Image::new(shown)
+            .corner_radius(6)
+            .show_loading_spinner(true)
+            .alt_text(image.alt.clone())
+            .fit_to_exact_size(rect.size())
+            .sense(Sense::click());
+        let response = ui.put(rect, widget);
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::ZoomIn);
+        }
+        if response.clicked() {
+            rc.actions
+                .push(ViewAction::ShowPicture(super::lightbox::Shown::Image(
+                    uri.clone(),
+                )));
+        }
+    }
 }
 
 /// Text of the document that is not a `Rich`: laid out, selectable with
@@ -2689,6 +2823,14 @@ fn estimate(block: &Block, width: f32) -> f32 {
         Block::Rule => body_size() + gap,
         Block::Details { .. } => line + gap,
         Block::DetailsEnd => 0.0,
+        Block::Gallery { masonry, images } => {
+            let rows = if *masonry {
+                images.len().div_ceil(GALLERY_COLUMNS) as f32 * width / GALLERY_COLUMNS as f32
+            } else {
+                images.len().div_ceil(3) as f32 * GALLERY_ROW * body_size() / 16.0
+            };
+            rows + gap
+        }
         Block::Embed { content, .. } => {
             let inner = match content {
                 Some(Ok(blocks)) => blocks.iter().map(|b| estimate(b, width - 40.0)).sum(),
@@ -2708,6 +2850,34 @@ pub fn block_top(view: &ViewState, block: usize) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn galleries_fill_rows_and_columns() {
+        // Two 2:1 pictures and a 1:1 at 100 high want 500 of 450: one row
+        // of all three, scaled to fit; then a short last row at 100.
+        let rects = justified_rows(&[2.0, 2.0, 1.0, 1.0], 450.0, 100.0, 0.0);
+        assert_eq!(rects.len(), 4);
+        assert!((rects[2].right() - 450.0).abs() < 0.01);
+        assert!((rects[0].height() - 90.0).abs() < 0.01);
+        assert_eq!(
+            rects[3],
+            Rect::from_min_size(pos2(0.0, 90.0), vec2(100.0, 100.0))
+        );
+        // With gaps, a full row still ends at the width.
+        let rects = justified_rows(&[1.5; 7], 500.0, 120.0, 5.0);
+        let first_row: Vec<&Rect> = rects.iter().filter(|r| r.top() == 0.0).collect();
+        assert!((first_row.last().unwrap().right() - 500.0).abs() < 0.01);
+
+        // Masonry: under the shortest column.
+        let rects = masonry_columns(&[1.0, 0.5, 1.0, 1.0], 310.0, 3, 5.0);
+        assert_eq!(
+            rects[0],
+            Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 100.0))
+        );
+        assert_eq!(rects[1].height(), 200.0);
+        assert_eq!(rects[3].left(), 0.0, "column 0 is shortest again");
+        assert_eq!(rects[3].top(), 105.0);
+    }
 
     #[test]
     fn image_sources_become_loadable_uris() {
