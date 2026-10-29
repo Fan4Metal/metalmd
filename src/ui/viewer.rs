@@ -241,6 +241,22 @@ impl ViewState {
         }
     }
 
+    /// Unfolds the folded callouts around the text `id` in top-level block
+    /// `block`, where find goes, nested ones too. A jump of its own does
+    /// not: it also restores the reading position, which must leave the
+    /// folds as they are.
+    pub fn unfold_around(&mut self, doc: &Document, block: usize, id: u32) {
+        let mut folds = Vec::new();
+        if let Some(block) = doc.blocks.get(block) {
+            folds_around(std::slice::from_ref(block), id, &mut folds);
+        }
+        for fold in folds {
+            if !details_open(fold.index, fold.open, &self.details) {
+                self.toggle_details(fold.index);
+            }
+        }
+    }
+
     fn toggle_details(&mut self, index: u32) {
         if !self.details.remove(&index) {
             self.details.insert(index);
@@ -627,6 +643,47 @@ fn hidden_blocks(blocks: &[Block], toggled: &HashSet<u32>) -> Option<Vec<bool>> 
         })
         .collect();
     Some(hidden)
+}
+
+/// Whether `blocks` hold the text `id`, adding the folds of the callouts
+/// around it to `folds`.
+fn folds_around(blocks: &[Block], id: u32, folds: &mut Vec<Fold>) -> bool {
+    let inlines_hold = |inlines: &[Inline]| {
+        inlines
+            .iter()
+            .any(|inline| matches!(inline, Inline::Text(rich) if rich.id == id))
+    };
+    blocks.iter().any(|block| match block {
+        Block::Heading { inlines, .. } | Block::Paragraph { inlines, .. } => inlines_hold(inlines),
+        Block::Details { summary, .. } => inlines_hold(summary),
+        Block::Code { id: own, .. }
+        | Block::Math { id: own, .. }
+        | Block::FrontMatter { id: own, .. } => *own == id,
+        Block::Alert { fold, blocks, .. } => {
+            let found = folds_around(blocks, id, folds);
+            if found && let Some(fold) = fold {
+                folds.push(*fold);
+            }
+            found
+        }
+        Block::Quote(blocks) | Block::Footnote { blocks, .. } => folds_around(blocks, id, folds),
+        Block::List { items, .. } => items
+            .iter()
+            .any(|item| folds_around(&item.blocks, id, folds)),
+        Block::Table(table) => table
+            .header
+            .iter()
+            .chain(table.rows.iter().flatten())
+            .any(|cell| inlines_hold(cell)),
+        Block::DefinitionList(items) => items.iter().any(|(terms, details)| {
+            folds_around(terms, id, folds) || details.iter().any(|d| folds_around(d, id, folds))
+        }),
+        Block::Embed {
+            content: Some(Ok(blocks)),
+            ..
+        } => folds_around(blocks, id, folds),
+        Block::Embed { .. } | Block::Gallery { .. } | Block::Rule | Block::DetailsEnd => false,
+    })
 }
 
 /// The `<summary>` row: a triangle and the summary, which opens or closes
@@ -2918,6 +2975,47 @@ pub fn block_top(view: &ViewState, block: usize) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_unfolds_the_callouts_around_its_match() {
+        let doc = Document::parse(concat!(
+            "> [!tip]- outer\n> > [!note]- inner\n> > secret word\n\n",
+            "- item\n\n  > [!info]- in a list\n  > other word\n\n",
+            "> [!warning]- untouched\n> word\n",
+        ));
+        let id_of = |text: &str| {
+            let found = doc.search.iter().find(|s| s.text.contains(text)).unwrap();
+            (found.block, found.id)
+        };
+        let mut view = ViewState::default();
+        let (block, id) = id_of("secret");
+        view.unfold_around(&doc, block, id);
+        let (block, id) = id_of("other");
+        view.unfold_around(&doc, block, id);
+        let mut toggled: Vec<u32> = view.toggled_details().iter().copied().collect();
+        toggled.sort();
+        let fold = |block: &Block| match block {
+            Block::Alert { fold: Some(f), .. } => f.index,
+            other => panic!("{other:?}"),
+        };
+        let Block::Alert { blocks: outer, .. } = &doc.blocks[0] else {
+            panic!()
+        };
+        let Block::List { items, .. } = &doc.blocks[1] else {
+            panic!()
+        };
+        let mut expected = vec![
+            fold(&doc.blocks[0]),
+            fold(&outer[0]),
+            fold(&items[0].blocks[1]),
+        ];
+        expected.sort();
+        assert_eq!(toggled, expected);
+        // Unfolded already: left so.
+        let (block, id) = id_of("secret");
+        view.unfold_around(&doc, block, id);
+        assert_eq!(view.toggled_details().len(), 3);
+    }
 
     #[test]
     fn galleries_fill_rows_and_columns() {

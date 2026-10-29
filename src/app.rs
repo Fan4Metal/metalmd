@@ -2725,6 +2725,7 @@ impl App {
             let line = code[..m.range.start.min(code.len())].matches('\n').count();
             offset -= line as f32 * (body_size() * 0.875 * 1.45).round();
         }
+        tab.view.unfold_around(doc, m.block, m.id);
         tab.view.jump_to(m.block, offset);
     }
 
