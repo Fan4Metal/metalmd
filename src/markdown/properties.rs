@@ -55,9 +55,16 @@ pub fn parse(yaml: &str) -> Option<Vec<Property>> {
         }
         let (key, rest) = split_key(line)?;
         let rest = strip_comment(rest).trim();
-        // The indented lines that follow.
+        // The indented lines that follow, and under a key with nothing
+        // after it list items that are not (`tags:` then `- a`, as YAML
+        // allows and many tools write).
         let start = i;
-        while i < lines.len() && (lines[i].starts_with([' ', '\t']) || lines[i].trim().is_empty()) {
+        let follows = |line: &str| {
+            line.starts_with([' ', '\t'])
+                || line.trim().is_empty()
+                || rest.is_empty() && (line.starts_with("- ") || line.trim_end() == "-")
+        };
+        while i < lines.len() && follows(lines[i]) {
             i += 1;
         }
         let block: Vec<&str> = lines[start..i].iter().map(|l| l.trim()).collect();
@@ -234,6 +241,20 @@ mod tests {
                 p("quoted key", &["it's"], false),
             ])
         );
+    }
+
+    #[test]
+    fn list_items_under_a_key_need_no_indent() {
+        let yaml = "tags:\n- a\n- \"b\"\n-\ntitle: T\n";
+        assert_eq!(
+            parse(yaml),
+            Some(vec![
+                p("tags", &["a", "b"], true),
+                p("title", &["T"], false)
+            ])
+        );
+        // Under a key with a value they belong to nothing.
+        assert_eq!(parse("title: T\n- a\n"), None);
     }
 
     #[test]
