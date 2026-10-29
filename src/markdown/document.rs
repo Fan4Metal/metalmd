@@ -320,18 +320,17 @@ impl Document {
             passes.push(copy_marker_rewrites(source));
         }
         let source = &*without_copy_markers(source);
-        let (preprocessed, rewrites) = if track {
-            let (text, rewrites) = preprocess::preprocess_with_rewrites(source);
-            (text, Some(rewrites))
-        } else {
-            (preprocess::preprocess(source), None)
-        };
+        let (preprocessed, rewrites) = preprocess::preprocess_with_rewrites(source);
+        let comment_columns = (!rewrites[0].is_empty())
+            .then(|| Box::new(preprocess::CommentColumns::new(source, &rewrites[0])));
+        let rewrites = track.then_some(rewrites);
         let arena = Arena::new();
         let options = preprocess::markdown_options();
         let root = parse_document(&arena, &preprocessed, &options);
 
         let mut builder = Builder {
             track: track.then(|| Box::new(Tracker::new(&preprocessed))),
+            comment_columns,
             ..Builder::default()
         };
         // Footnote numbers are assigned in reference order; definitions come
@@ -611,6 +610,8 @@ struct Builder {
     table_lines: Vec<(usize, usize)>,
     /// Places in the source, kept for `markdown::source` only.
     track: Option<Box<Tracker>>,
+    /// Task boxes' columns in the file, when comments were taken out.
+    comment_columns: Option<Box<preprocess::CommentColumns>>,
     /// The block being built, when places are kept.
     block_source: Option<Range<usize>>,
     /// The HTML block being built, when places are kept.
@@ -1015,12 +1016,19 @@ impl Builder {
                 let mut items = Vec::new();
                 for item in node.children() {
                     let task = match &item.data().value {
-                        NodeValue::TaskItem(task) => Some(Task {
-                            checked: matches!(task.symbol, Some('x' | 'X')),
-                            mark: task.symbol.unwrap_or(' '),
-                            line: task.symbol_sourcepos.start.line,
-                            column: task.symbol_sourcepos.start.column,
-                        }),
+                        NodeValue::TaskItem(task) => {
+                            let start = task.symbol_sourcepos.start;
+                            let column = match &self.comment_columns {
+                                Some(columns) => columns.original(start.line, start.column),
+                                None => start.column,
+                            };
+                            Some(Task {
+                                checked: matches!(task.symbol, Some('x' | 'X')),
+                                mark: task.symbol.unwrap_or(' '),
+                                line: start.line,
+                                column,
+                            })
+                        }
                         _ => None,
                     };
                     let blocks = self.children_blocks(item);

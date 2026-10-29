@@ -980,6 +980,62 @@ fn comments<'a>(content: &'a str, rewrites: &mut Vec<Rewrite>) -> Cow<'a, str> {
     Cow::Owned(out)
 }
 
+/// Columns in the text without comments as columns in the file: the only
+/// pass that changes what precedes a task box on its line is the one that
+/// takes the comments out (`%%c%% - [ ] task`), and every pass keeps lines.
+pub struct CommentColumns {
+    rewrites: Vec<Rewrite>,
+    /// Where each line starts in the file and without the comments.
+    file_lines: Vec<usize>,
+    lines: Vec<usize>,
+}
+
+impl CommentColumns {
+    /// For `source` and the rewrites of [`comments`] in it.
+    pub fn new(source: &str, rewrites: &[Rewrite]) -> CommentColumns {
+        let mut text = String::with_capacity(source.len());
+        let mut copied = 0;
+        for rewrite in rewrites {
+            text.push_str(&source[copied..rewrite.from.start]);
+            text.extend(
+                source[rewrite.from.clone()]
+                    .chars()
+                    .filter(|&c| c == '\n' || c == '\r'),
+            );
+            copied = rewrite.from.end;
+        }
+        text.push_str(&source[copied..]);
+        CommentColumns {
+            rewrites: rewrites.to_vec(),
+            file_lines: line_starts(source),
+            lines: line_starts(&text),
+        }
+    }
+
+    /// The column (from 1) in the file of `column` on `line` (from 1).
+    pub fn original(&self, line: usize, column: usize) -> usize {
+        let index = line.saturating_sub(1);
+        let (Some(&start), Some(&file_start)) = (self.lines.get(index), self.file_lines.get(index))
+        else {
+            return column;
+        };
+        let at = before_rewrites(&self.rewrites, start + column.saturating_sub(1), false);
+        at.saturating_sub(file_start) + 1
+    }
+}
+
+/// Where each line of `text` starts, after `\n`, `\r\n` or `\r`.
+fn line_starts(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut starts = vec![0];
+    for (at, &b) in bytes.iter().enumerate() {
+        if b == b'\n' || (b == b'\r' && bytes.get(at + 1) != Some(&b'\n')) {
+            starts.push(at + 1);
+        }
+    }
+    starts
+}
+
 /// [`preprocess`], also giving each pass's rewrites, first pass first.
 pub fn preprocess_with_rewrites(content: &str) -> (Cow<'_, str>, [Vec<Rewrite>; 5]) {
     let mut passes: [Vec<Rewrite>; 5] = Default::default();

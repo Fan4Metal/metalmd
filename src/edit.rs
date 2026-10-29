@@ -236,6 +236,21 @@ mod tests {
     }
 
     #[test]
+    fn finds_the_box_after_comments() {
+        let source = concat!(
+            "%%c%% - [ ] after a comment\n",
+            "%%a\nlong one%% - [ ] after one over lines\r\n",
+            "Text %%x%% and %%y%% here\n\n",
+            "- [x] %%z%% plain\n",
+        );
+        let all = each_toggled(source);
+        assert_eq!(all.len(), 3);
+        assert!(all[0].starts_with("%%c%% - [x] after a comment\n"));
+        assert!(all[1].contains("long one%% - [x] after one over lines\r\n"));
+        assert!(all[2].ends_with("- [ ] %%z%% plain\n"));
+    }
+
+    #[test]
     fn a_box_already_as_wanted_or_gone_is_left_alone() {
         let task = tasks("- [ ] one\n")[0];
         assert_eq!(toggled("- [x] one\n", task).as_deref(), Some("- [x] one\n"));
