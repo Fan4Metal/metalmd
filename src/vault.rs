@@ -151,6 +151,10 @@ struct State {
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(Default::default);
 
+/// Held while a vault is listed, so that loaders of several tabs at once
+/// list it once and the others use that listing.
+static LISTING: Mutex<()> = Mutex::new(());
+
 fn state() -> std::sync::MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -201,8 +205,10 @@ pub fn locate(folder: &Path, target: &str, ctx: &egui::Context) -> Located {
                 let spawned = std::thread::Builder::new()
                     .name("vault".into())
                     .spawn(move || {
+                        let listing = LISTING.lock().unwrap_or_else(|e| e.into_inner());
                         let index = Arc::new(Index::build(&made));
                         state().vaults.insert(made, Slot::Ready(index));
+                        drop(listing);
                         ctx.request_repaint();
                     });
                 if spawned.is_ok() {
@@ -225,20 +231,29 @@ pub fn locate(folder: &Path, target: &str, ctx: &egui::Context) -> Located {
 /// when the target is not in it.
 pub fn locate_now(folder: &Path, target: &str) -> Option<PathBuf> {
     let root = root_of(folder)?;
-    let ready = match state().vaults.get(&root) {
+    let ready = || match state().vaults.get(&root) {
         Some(Slot::Ready(index)) => Some(index.clone()),
         _ => None,
     };
-    if let Some(index) = &ready
+    let fresh = |index: &Option<Arc<Index>>| {
+        index
+            .as_ref()
+            .is_some_and(|index| index.made.elapsed() < STALE)
+    };
+    let index = ready();
+    if let Some(index) = &index
         && let Some(found) = index.find(target, folder)
     {
         return Some(found);
     }
-    if ready
-        .as_ref()
-        .is_some_and(|index| index.made.elapsed() < STALE)
-    {
+    if fresh(&index) {
         return None;
+    }
+    let _listing = LISTING.lock().unwrap_or_else(|e| e.into_inner());
+    // Listed by another thread meanwhile.
+    let index = ready();
+    if fresh(&index) {
+        return index.and_then(|index| index.find(target, folder));
     }
     let index = Arc::new(Index::build(&root));
     let found = index.find(target, folder);
