@@ -257,6 +257,65 @@ pub fn forget() {
     state
         .vaults
         .retain(|_, slot| matches!(slot, Slot::Building));
+    drop(state);
+    checks().clear();
+}
+
+/// Whether a link's file was found: folder → decoded path → found, `None`
+/// while the check is queued.
+type Checks = HashMap<PathBuf, HashMap<String, Option<bool>>>;
+
+static CHECKS: LazyLock<Mutex<Checks>> = LazyLock::new(Default::default);
+
+fn checks() -> std::sync::MutexGuard<'static, Checks> {
+    CHECKS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The thread that checks links, started with the first one.
+static CHECKER: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<(PathBuf, String)>>> =
+    std::sync::OnceLock::new();
+
+/// Whether `target`, a link in a document in `folder`, names a file that
+/// is neither there nor in the vault, as Obsidian shows such a link
+/// fainter. Only paths are checked (not web addresses or anchors), on a
+/// thread of its own: `false` until it has looked, then `ctx` repaints.
+pub fn link_missing(folder: &Path, target: &str, ctx: &egui::Context) -> bool {
+    let target = target.trim();
+    if target.is_empty() || target.starts_with('#') || crate::app::has_url_scheme(target) {
+        return false;
+    }
+    let path = target.split(['#', '?']).next().unwrap_or(target);
+    if let Some(found) = checks().get(folder).and_then(|m| m.get(path)) {
+        return *found == Some(false);
+    }
+    checks()
+        .entry(folder.to_path_buf())
+        .or_default()
+        .insert(path.to_owned(), None);
+    let sender = CHECKER.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::channel::<(PathBuf, String)>();
+        let ctx = ctx.clone();
+        let _ = std::thread::Builder::new()
+            .name("links".into())
+            .spawn(move || {
+                for (folder, path) in receiver {
+                    let decoded = crate::markdown::preprocess::percent_decode(&path);
+                    let found =
+                        folder.join(&decoded).exists() || locate_now(&folder, &decoded).is_some();
+                    checks()
+                        .entry(folder)
+                        .or_default()
+                        .insert(path, Some(found));
+                    ctx.request_repaint();
+                }
+            });
+        Mutex::new(sender)
+    });
+    let _ = sender
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send((folder.to_path_buf(), path.to_owned()));
+    false
 }
 
 #[cfg(test)]
@@ -278,6 +337,35 @@ mod tests {
         }
         let index = Index::build(&root);
         (root, index)
+    }
+
+    #[test]
+    fn missing_links_are_told_once_checked() {
+        let (root, _) = vault(&["notes/a.md", "other/b.md"]);
+        let folder = root.join("notes");
+        let ctx = egui::Context::default();
+        let ask = |target: &str| {
+            // Queued first, then answered by the thread.
+            for _ in 0..200 {
+                let missing = link_missing(&folder, target, &ctx);
+                if checks()
+                    .get(&folder)
+                    .and_then(|m| m.get(target))
+                    .is_some_and(Option::is_some)
+                {
+                    return missing || link_missing(&folder, target, &ctx);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            panic!("{target} not checked");
+        };
+        assert!(!ask("a.md"));
+        assert!(!ask("b.md"), "found in the vault");
+        assert!(ask("gone.md"));
+        assert!(ask("My%20Gone.md"));
+        assert!(!link_missing(&folder, "https://example.com/x.md", &ctx));
+        assert!(!link_missing(&folder, "#top", &ctx));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

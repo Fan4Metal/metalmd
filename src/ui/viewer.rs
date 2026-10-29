@@ -1771,6 +1771,13 @@ fn rich_job(rich: &Rich, rc: &mut RenderCtx<'_>, ui: &Ui, size: f32, extra: Styl
             continue;
         }
         let mut format = text_format(rc, style, size);
+        // A link to a file that is not there, fainter, as Obsidian shows it.
+        if let (Some(link), Some(base)) = (span.link, rc.base_dir)
+            && let Some(target) = rich.links.get(link as usize)
+            && crate::vault::link_missing(base, target, ui.ctx())
+        {
+            format.color = format.color.gamma_multiply(0.55);
+        }
         if let (Some(link), Some((id, hovered))) = (span.link, rc.hover)
             && id == rich.id
             && hovered == link
