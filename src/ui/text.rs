@@ -31,7 +31,7 @@ pub enum TextChange {
         dark: bool,
         color: Option<Color32>,
     },
-    /// Back to the default fonts, size and highlight colours.
+    /// Back to the default fonts, size, width and highlight colours.
     Reset,
 }
 
@@ -67,17 +67,49 @@ impl TextPanel {
             .anchor(Align2::RIGHT_TOP, vec2(-10.0, 44.0))
             .show(ctx, |ui| {
                 egui::Grid::new("text-panel-grid")
-                    .num_columns(2)
+                    .num_columns(3)
                     .spacing([12.0, 8.0])
                     .show(ui, |ui| {
                         ui.label(tr!("Text font", "Шрифт текста"));
                         let body = settings.font.as_ref().map(|f| f.family.as_str());
                         change = change.take().or(self.font_list(ui, false, body));
+                        if reset_button(
+                            ui,
+                            "reset-body",
+                            body.is_some(),
+                            &tr!(
+                                format!("Default ({})", DEFAULT_FAMILIES.0),
+                                format!("По умолчанию ({})", DEFAULT_FAMILIES.0)
+                            ),
+                        )
+                        .clicked()
+                        {
+                            change = Some(TextChange::Font {
+                                mono: false,
+                                family: None,
+                            });
+                        }
                         ui.end_row();
 
                         ui.label(tr!("Code font", "Шрифт кода"));
                         let mono = settings.mono_font.as_ref().map(|f| f.family.as_str());
                         change = change.take().or(self.font_list(ui, true, mono));
+                        if reset_button(
+                            ui,
+                            "reset-code",
+                            mono.is_some(),
+                            &tr!(
+                                format!("Default ({})", DEFAULT_FAMILIES.1),
+                                format!("По умолчанию ({})", DEFAULT_FAMILIES.1)
+                            ),
+                        )
+                        .clicked()
+                        {
+                            change = Some(TextChange::Font {
+                                mono: true,
+                                family: None,
+                            });
+                        }
                         ui.end_row();
 
                         ui.label(tr!("Text size", "Размер текста"));
@@ -88,6 +120,19 @@ impl TextPanel {
                             .suffix(tr!(" pt", " пт"));
                         if ui.add(slider).changed() {
                             change = Some(TextChange::Size(size));
+                        }
+                        if reset_button(
+                            ui,
+                            "reset-size",
+                            settings.text_size != DEFAULT_BODY_SIZE,
+                            &tr!(
+                                format!("Default ({DEFAULT_BODY_SIZE:.0} pt)"),
+                                format!("По умолчанию ({DEFAULT_BODY_SIZE:.0} пт)")
+                            ),
+                        )
+                        .clicked()
+                        {
+                            change = Some(TextChange::Size(DEFAULT_BODY_SIZE));
                         }
                         ui.end_row();
 
@@ -111,12 +156,43 @@ impl TextPanel {
                         if ui.add(slider).changed() {
                             change = Some(TextChange::Width(width));
                         }
+                        if reset_button(
+                            ui,
+                            "reset-width",
+                            settings.text_width != DEFAULT_CONTENT_WIDTH,
+                            &tr!(
+                                format!("Default ({DEFAULT_CONTENT_WIDTH:.0} pt)"),
+                                format!("По умолчанию ({DEFAULT_CONTENT_WIDTH:.0} пт)")
+                            ),
+                        )
+                        .clicked()
+                        {
+                            change = Some(TextChange::Width(DEFAULT_CONTENT_WIDTH));
+                        }
                         ui.end_row();
 
                         ui.label(tr!("Highlight colour", "Цвет выделения"));
                         let dark = ctx.theme() == egui::Theme::Dark;
                         if let Some(color) = mark_colors(ui, settings, dark) {
                             change = Some(TextChange::MarkColor { dark, color });
+                        }
+                        let custom = if dark {
+                            &settings.mark_color_dark
+                        } else {
+                            &settings.mark_color
+                        };
+                        if reset_button(
+                            ui,
+                            "reset-color",
+                            custom.is_some(),
+                            tr!(
+                                "Default highlight colour for this theme",
+                                "Цвет выделения по умолчанию для этой темы"
+                            ),
+                        )
+                        .clicked()
+                        {
+                            change = Some(TextChange::MarkColor { dark, color: None });
                         }
                         ui.end_row();
                     });
@@ -128,7 +204,14 @@ impl TextPanel {
                     && settings.mark_color.is_none()
                     && settings.mark_color_dark.is_none();
                 if ui
-                    .add_enabled(!default, egui::Button::new(tr!("Reset", "Сбросить")))
+                    .add_enabled(
+                        !default,
+                        egui::Button::new(tr!("Reset all", "Сбросить все")),
+                    )
+                    .on_hover_text(tr!(
+                        "Reset all text settings",
+                        "Сбросить все настройки текста"
+                    ))
                     .clicked()
                 {
                     change = Some(TextChange::Reset);
@@ -208,6 +291,43 @@ impl TextPanel {
             });
         change
     }
+}
+
+/// A clockwise reset arrow: an open ring with a filled triangular head on
+/// its right, pointing down along the tangent, as in the visual reference.
+fn reset_button(ui: &mut Ui, salt: &str, enabled: bool, tip: &str) -> Response {
+    ui.add_enabled_ui(enabled, |ui| {
+        let id = ui.id().with(salt);
+        let icon = egui::Atom::custom(id, vec2(14.0, 14.0));
+        let button = egui::Button::new(icon).min_size(vec2(26.0, ui.spacing().interact_size.y));
+        let shown = button.atom_ui(ui);
+        if let Some(rect) = shown.rect(id) {
+            let center = rect.center() + vec2(-0.75, 0.0);
+            let radius = 4.5;
+            let color = ui.style().interact(&shown.response).text_color();
+            let stroke = Stroke::new(1.8, color);
+            let arc = (0..=36)
+                .map(|i| {
+                    let angle = (55.0 + 305.0 * i as f32 / 36.0).to_radians();
+                    center + vec2(angle.cos(), angle.sin()) * radius
+                })
+                .collect();
+            ui.painter().add(egui::Shape::line(arc, stroke));
+            ui.painter().add(egui::Shape::convex_polygon(
+                vec![
+                    center + vec2(radius - 2.65, -0.9),
+                    center + vec2(radius + 2.65, -0.9),
+                    center + vec2(radius, 2.35),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        shown.response
+    })
+    .inner
+    .on_hover_text(tip)
+    .on_disabled_hover_text(tip)
 }
 
 /// The highlight colours of the theme (`dark` or light) as swatches, the
