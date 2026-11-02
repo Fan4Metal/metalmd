@@ -306,6 +306,9 @@ fn rebase(blocks: &mut [Block], offset: Offset, file: &Path, images: &mut Vec<St
                     }
                 }
             }
+            Block::Video { src, .. } => {
+                *src = absolute(src, file);
+            }
             Block::Rule | Block::DetailsEnd => {}
         }
     }

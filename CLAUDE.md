@@ -19,9 +19,11 @@ cargo test markdown::preprocess::tests::copy_reference_output_becomes_a_real_lin
 cargo clippy --all-targets     # kept at zero warnings
 cargo fmt
 uv run build.py                # release build, first closing a metalmd.exe running from target\
-python tools/make_release.py   # tests + release build + dist\MetalMD_<ver>_Setup.exe and _portable.zip (needs Inno Setup 6); --no-tests, --install
+uv run tools/make_release.py   # tests + release build + dist\MetalMD_<ver>_Setup.exe and _portable.zip (needs Inno Setup 6); --no-tests, --install
 python tools/notices.py        # licenses\THIRD_PARTY_NOTICES.txt and SYNTAXES_AND_THEMES.txt after the dependencies change (tests fail until then)
 ```
+
+After finishing a user-facing change, run `cargo test` and `cargo clippy --all-targets`, then install the build with `uv run tools/make_release.py --no-tests --install` so the user can test the installed app. Use this exact `uv run` command. Installation is already authorized, including closing a running MetalMD; report the installed version afterwards.
 
 Releases: pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which runs `make_release.py` and publishes both files. The tag must equal the version in `Cargo.toml`. `tools/setup.iss` installs per user. Its `assoc` task registers `.md`, `.markdown`, `.mdown` and `.mkd` through `[Registry]` entries: a ProgID, OpenWithProgids and Default apps capabilities. qview does this from its exe with `--register`; MetalMD has no such code. `make_release.py` gets the installer icon from `metalmd.exe --export-icon <file>`. `.cargo/config.toml` links the CRT statically, so no VCRUNTIME140.dll is needed. These scripts mirror qview's and disk_flashlight's; keep them in step.
 

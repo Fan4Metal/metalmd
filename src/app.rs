@@ -743,10 +743,12 @@ impl App {
             let math_cell = startup.ctx_cell.clone();
             let emoji_cell = startup.ctx_cell.clone();
             let diagram_cell = startup.ctx_cell.clone();
+            let video_cell = startup.ctx_cell.clone();
             Pictures {
                 math: MathRenderer::new(move || request_repaint(&math_cell)),
                 emoji: EmojiRenderer::new(move || request_repaint(&emoji_cell)),
                 diagrams: DiagramRenderer::new(move || request_repaint(&diagram_cell)),
+                video: crate::ui::video::VideoPlayer::new(move || request_repaint(&video_cell)),
             }
         };
 
@@ -2840,6 +2842,7 @@ impl App {
     /// One frame of the current window.
     fn window_ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.pictures.video.begin_view(ctx.viewport_id());
         let cur = self.current;
         if cur != 0 {
             self.appear(&ctx);
@@ -2961,7 +2964,7 @@ impl App {
                             &self.fonts,
                             self.fonts_generation,
                             &self.highlighter,
-                            &self.pictures,
+                            &mut self.pictures,
                             base_dir.as_deref(),
                             find,
                         );
@@ -3063,6 +3066,9 @@ impl App {
         if !matches!(self.windows[cur].appear, Appear::Looking(_)) {
             self.update_title(&ctx);
         }
+        if !ctx.will_discard() {
+            self.pictures.video.end_view();
+        }
     }
 }
 
@@ -3072,6 +3078,10 @@ impl eframe::App for App {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|input| input.viewport().minimized.unwrap_or(false)) {
+            self.pictures.video.begin_view(ctx.viewport_id());
+            self.pictures.video.end_view();
+        }
         if self.raise.swap(false, Ordering::Acquire) {
             self.raise_window(ctx);
         }
@@ -3115,6 +3125,12 @@ impl eframe::App for App {
         }
         self.current = 0;
         self.close_windows();
+        if !ctx.will_discard() {
+            let windows = &self.windows;
+            self.pictures
+                .video
+                .retain_views(|viewport| windows.iter().any(|window| window.viewport == viewport));
+        }
 
         self.follow_theme(&ctx);
         let zoom = ctx.zoom_factor();
@@ -3171,7 +3187,7 @@ pub fn resolve_anchor(doc: &Document, anchor: &str) -> Option<usize> {
 
 /// The path a `file:` URL names (`file:///C:/a.md` → `C:/a.md`,
 /// `file://host/share/a.md` → `//host/share/a.md`), percent-decoded.
-fn file_url_path(target: &str) -> Option<String> {
+pub(crate) fn file_url_path(target: &str) -> Option<String> {
     let scheme = target.get(..5)?;
     if !scheme.eq_ignore_ascii_case("file:") {
         return None;

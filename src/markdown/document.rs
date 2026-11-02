@@ -86,6 +86,7 @@ impl Rich {
     }
 }
 
+/// An embedded picture or video; both take part in the same gallery layout.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageRef {
     /// As written in the document: a URL or a path relative to it.
@@ -226,7 +227,7 @@ pub enum Block {
     },
     DetailsEnd,
     /// A `> [!gallery]` callout of the reader's Media Gallery plugin, made
-    /// of pictures only: justified rows of them, or with `gallery-masonry`
+    /// of pictures and videos: justified rows, or with `gallery-masonry`
     /// columns.
     Gallery {
         masonry: bool,
@@ -241,6 +242,13 @@ pub enum Block {
         src: String,
         /// Filled by `markdown::embed::fill` once the note is read.
         content: Option<Result<Vec<Block>, String>>,
+    },
+    /// A video file, `![[clip.mp4]]` or `![[clip.mp4|640x360]]`.
+    Video {
+        /// As written: a path relative to the document or a `file:` URL.
+        src: String,
+        width: Option<f32>,
+        height: Option<f32>,
     },
 }
 
@@ -899,6 +907,14 @@ impl Builder {
                         title,
                         src,
                         content: None,
+                    }));
+                    return;
+                }
+                if let Some(videos) = lone_video_embeds(node) {
+                    out.extend(videos.into_iter().map(|(src, width, height)| Block::Video {
+                        src,
+                        width,
+                        height,
                     }));
                     return;
                 }
@@ -1763,7 +1779,7 @@ impl InlineCtx {
                 self.link = saved;
             }
             NodeValue::Image(link) if is_other_file(&link.url) => {
-                // Obsidian embeds a PDF, a sound, a video or any file with
+                // Obsidian embeds a PDF, a sound or any file with
                 // `![[file.pdf]]`: a viewer of its own, here a link to it.
                 let url = link.url.clone();
                 drop(data);
@@ -1992,10 +2008,22 @@ fn strip_front_matter_fences(raw: &str) -> String {
     lines.join("\n")
 }
 
+/// Whether `src` is a video file: one with a video extension.
+pub fn is_video_file(src: &str) -> bool {
+    const VIDEOS: [&str; 8] = ["mp4", "m4v", "webm", "mov", "mkv", "avi", "wmv", "flv"];
+    let src = src.trim();
+    if src.contains("://") && !src.starts_with("file:") || src.starts_with("data:") {
+        return false;
+    }
+    let path = src.split(['?', '#']).next().unwrap_or(src);
+    preprocess::link_path_extension(path)
+        .is_some_and(|ext| VIDEOS.iter().any(|v| ext.eq_ignore_ascii_case(v)))
+}
+
 /// Whether an image's source names a local file that is no picture (a
-/// PDF, a sound, a video, a spreadsheet): one with an extension that is
-/// not of an image. A source without one may still be a picture, and so
-/// may a web address with any (`avatar.php`).
+/// PDF, a sound, a spreadsheet): one with an extension that is not of
+/// an image or a video. A source without one may still be a picture, and
+/// so may a web address with any (`avatar.php`).
 fn is_other_file(src: &str) -> bool {
     const PICTURES: [&str; 14] = [
         "png", "jpg", "jpeg", "jfif", "gif", "webp", "svg", "bmp", "ico", "apng", "avif", "tif",
@@ -2006,8 +2034,9 @@ fn is_other_file(src: &str) -> bool {
         return false;
     }
     let path = src.split(['?', '#']).next().unwrap_or(src);
-    preprocess::link_path_extension(path)
-        .is_some_and(|ext| !PICTURES.iter().any(|p| ext.eq_ignore_ascii_case(p)))
+    preprocess::link_path_extension(path).is_some_and(|ext| {
+        !PICTURES.iter().any(|p| ext.eq_ignore_ascii_case(p)) && !is_video_file(src)
+    })
 }
 
 /// The link a tag's span carries, followed by the tag (`#name`): a click
@@ -2044,6 +2073,16 @@ fn find_tag(text: &str, before: Option<char>) -> Option<Range<usize>> {
 fn gallery_images(blocks: &[Block]) -> Option<Vec<ImageRef>> {
     let mut images = Vec::new();
     for block in blocks {
+        if let Block::Video { src, width, height } = block {
+            images.push(ImageRef {
+                src: src.clone(),
+                alt: String::new(),
+                link: None,
+                width: *width,
+                height: *height,
+            });
+            continue;
+        }
         let Block::Paragraph { inlines, .. } = block else {
             return None;
         };
@@ -2066,6 +2105,35 @@ fn lone_note_embeds<'a>(node: Node<'a>) -> Option<Vec<(String, String)>> {
         match &child.data().value {
             NodeValue::Image(link) if link.title == preprocess::NOTE_EMBED_TITLE => {
                 found.push((collect_text(child), link.url.clone()));
+            }
+            NodeValue::SoftBreak | NodeValue::LineBreak => {}
+            NodeValue::Text(t) if t.trim().is_empty() => {}
+            _ => return None,
+        }
+    }
+    (!found.is_empty()).then_some(found)
+}
+
+type VideoEmbed = (String, Option<f32>, Option<f32>);
+
+/// Video embeds alone in a paragraph: `![[clip.mp4]]` or `![[clip.mp4|640x360]]`.
+fn lone_video_embeds<'a>(node: Node<'a>) -> Option<Vec<VideoEmbed>> {
+    let mut found = Vec::new();
+    for child in node.children() {
+        match &child.data().value {
+            NodeValue::Image(link) if is_video_file(&link.url) => {
+                let src = link.url.clone();
+                let alt = collect_text(child);
+                let (width, height) = match link.title.strip_prefix(EMBED_SIZE_TITLE_PREFIX) {
+                    Some(size) => parse_embed_size(size),
+                    None => match alt.rsplit_once('|') {
+                        Some((_, size)) if preprocess::is_embed_size(size.trim()) => {
+                            parse_embed_size(size.trim())
+                        }
+                        _ => (None, None),
+                    },
+                };
+                found.push((src, width, height));
             }
             NodeValue::SoftBreak | NodeValue::LineBreak => {}
             NodeValue::Text(t) if t.trim().is_empty() => {}
@@ -2975,6 +3043,43 @@ mod tests {
         assert_eq!(galleries, [(false, 3), (true, 1)]);
         // With text in it, a callout as any other.
         assert!(matches!(doc.blocks[2], Block::Alert { .. }));
+    }
+
+    #[test]
+    fn galleries_mix_images_and_videos_with_both_embed_syntaxes() {
+        let doc = Document::parse(concat!(
+            "> [!gallery]\n> ![[photo.png]] ![[clip.mp4]]\n>\n> ![second](second.webm)\n\n",
+            "> [!gallery-masonry]\n> ![[clip.mp4|200x100]]\n> ![last](last.jpg)\n"
+        ));
+        for (index, masonry, sources) in [
+            (0, false, vec!["photo.png", "clip.mp4", "second.webm"]),
+            (1, true, vec!["clip.mp4", "last.jpg"]),
+        ] {
+            let Block::Gallery {
+                masonry: actual,
+                images,
+            } = &doc.blocks[index]
+            else {
+                panic!("mixed media must remain a gallery");
+            };
+            assert_eq!(*actual, masonry);
+            assert_eq!(
+                images
+                    .iter()
+                    .map(|image| image.src.as_str())
+                    .collect::<Vec<_>>(),
+                sources
+            );
+        }
+        let sized = Document::parse("![[clip.mp4|200x100]]");
+        assert!(matches!(
+            sized.blocks[0],
+            Block::Video {
+                width: Some(200.0),
+                height: Some(100.0),
+                ..
+            }
+        ));
     }
 
     #[test]

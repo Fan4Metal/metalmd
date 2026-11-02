@@ -380,7 +380,8 @@ fn each_part(blocks: &[Block], f: &mut impl FnMut(Part, &str)) {
             | Block::Rule
             | Block::DetailsEnd
             | Block::Embed { .. }
-            | Block::Gallery { .. } => {}
+            | Block::Gallery { .. }
+            | Block::Video { .. } => {}
         }
     }
 }

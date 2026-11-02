@@ -7,7 +7,7 @@
 
 use crate::markdown::document::{
     AlertKind, Align, Block, Document, Fold, ImageRef, Inline, ListItem, Rich, Span, Style, Table,
-    Task,
+    Task, is_video_file,
 };
 use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
@@ -281,6 +281,7 @@ pub struct Pictures {
     pub math: MathRenderer,
     pub emoji: EmojiRenderer,
     pub diagrams: DiagramRenderer,
+    pub video: super::video::VideoPlayer,
 }
 
 /// Everything a frame of rendering needs besides the document.
@@ -290,7 +291,7 @@ pub struct RenderCtx<'a> {
     /// Changes whenever the font set changes (CJK fallback loaded).
     pub fonts_generation: u64,
     pub highlighter: &'a Highlighter,
-    pub pictures: &'a Pictures,
+    pub pictures: &'a mut Pictures,
     pub base_dir: Option<&'a Path>,
     pub find: &'a FindState,
     pub actions: Vec<ViewAction>,
@@ -319,7 +320,7 @@ impl<'a> RenderCtx<'a> {
         fonts: &'a FontChoice,
         fonts_generation: u64,
         highlighter: &'a Highlighter,
-        pictures: &'a Pictures,
+        pictures: &'a mut Pictures,
         base_dir: Option<&'a Path>,
         find: &'a FindState,
     ) -> Self {
@@ -682,7 +683,11 @@ fn folds_around(blocks: &[Block], id: u32, folds: &mut Vec<Fold>) -> bool {
             content: Some(Ok(blocks)),
             ..
         } => folds_around(blocks, id, folds),
-        Block::Embed { .. } | Block::Gallery { .. } | Block::Rule | Block::DetailsEnd => false,
+        Block::Embed { .. }
+        | Block::Gallery { .. }
+        | Block::Video { .. }
+        | Block::Rule
+        | Block::DetailsEnd => false,
     })
 }
 
@@ -857,6 +862,9 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             content,
         } => draw_embed(ui, title, src, content.as_ref(), rc, salt),
         Block::Gallery { masonry, images } => draw_gallery(ui, *masonry, images, rc),
+        Block::Video { src, width, height } => {
+            draw_video(ui, src, *width, *height, rc);
+        }
         Block::Alert {
             kind,
             title,
@@ -1070,9 +1078,28 @@ fn masonry_columns(aspects: &[f32], width: f32, columns: usize, gap: f32) -> Vec
 /// each shown on its own with a click. A picture not loaded yet takes 4:3.
 fn draw_gallery(ui: &mut Ui, masonry: bool, images: &[ImageRef], rc: &mut RenderCtx<'_>) {
     let width = ui.available_width();
-    let items: Vec<(Option<String>, f32)> = images
+    let items: Vec<_> = images
         .iter()
         .map(|image| {
+            if is_video_file(&image.src) {
+                let (path, waiting) = video_source(ui.ctx(), &image.src, rc.base_dir);
+                rc.pending |= waiting;
+                let state = if waiting {
+                    None
+                } else {
+                    path.as_ref()
+                        .and_then(|path| rc.pictures.video.get(ui.ctx(), path))
+                };
+                let aspect = match &state {
+                    Some(super::video::VideoState::Ready(frame)) => frame.size.x / frame.size.y,
+                    Some(super::video::VideoState::Failed(_)) => 4.0 / 3.0,
+                    _ => {
+                        rc.pending = true;
+                        4.0 / 3.0
+                    }
+                };
+                return (None, path, state, aspect);
+            }
             let (uri, waiting) = image_source(ui.ctx(), &image.src, rc.base_dir);
             rc.pending |= waiting;
             let aspect = uri
@@ -1087,10 +1114,10 @@ fn draw_gallery(ui: &mut Ui, masonry: bool, images: &[ImageRef], rc: &mut Render
                 })
                 .filter(|size| size.x > 0.0 && size.y > 0.0)
                 .map_or(4.0 / 3.0, |size| size.x / size.y);
-            (uri, aspect)
+            (uri, None, None, aspect)
         })
         .collect();
-    let aspects: Vec<f32> = items.iter().map(|(_, a)| *a).collect();
+    let aspects: Vec<f32> = items.iter().map(|(_, _, _, a)| *a).collect();
     let rects = if masonry {
         masonry_columns(&aspects, width, GALLERY_COLUMNS, GALLERY_GAP)
     } else {
@@ -1103,9 +1130,23 @@ fn draw_gallery(ui: &mut Ui, masonry: bool, images: &[ImageRef], rc: &mut Render
     };
     let height = rects.iter().map(|r| r.bottom()).fold(0.0, f32::max);
     let (area, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    for (((uri, _), rect), image) in items.iter().zip(&rects).zip(images) {
+    for (((uri, path, state, _), rect), image) in items.iter().zip(&rects).zip(images) {
         let rect = rect.translate(area.min.to_vec2());
         if !ui.is_rect_visible(rect) {
+            continue;
+        }
+        if is_video_file(&image.src) {
+            match (path, state) {
+                (Some(path), Some(super::video::VideoState::Ready(frame))) => {
+                    draw_video_at(ui, path, frame, rect, rc);
+                }
+                (_, Some(super::video::VideoState::Failed(error))) => {
+                    ui.put(rect, Label::new(format!("[video error: {error}]")));
+                }
+                _ => {
+                    ui.put(rect, egui::Spinner::new());
+                }
+            }
             continue;
         }
         let Some(uri) = uri else {
@@ -2500,7 +2541,7 @@ pub fn document_pictures(
 ) -> Vec<super::lightbox::Item> {
     use super::lightbox::{Item, Shown};
     fn image(ctx: &egui::Context, image: &ImageRef, base: Option<&Path>, out: &mut Vec<Item>) {
-        if image.link.is_some() {
+        if image.link.is_some() || is_video_file(&image.src) {
             return;
         }
         if let Some(uri) = image_source(ctx, &image.src, base).0 {
@@ -2553,6 +2594,7 @@ pub fn document_pictures(
                         }
                     }
                 }
+                Block::Video { .. } => {}
                 Block::Gallery { images, .. } => {
                     for i in images {
                         image(ctx, i, base, out);
@@ -2657,6 +2699,9 @@ fn file_uri(path: &Path) -> String {
 }
 
 fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) -> Response {
+    if is_video_file(&image.src) {
+        return draw_video(ui, &image.src, image.width, image.height, rc);
+    }
     let available = ui.available_width().max(16.0);
     let fallback = |ui: &mut Ui, rc: &mut RenderCtx<'_>| {
         let alt = if image.alt.is_empty() {
@@ -2730,6 +2775,180 @@ fn draw_image(ui: &mut Ui, image: &ImageRef, rc: &mut RenderCtx<'_>) -> Response
         }
     }
     response
+}
+
+fn draw_video(
+    ui: &mut Ui,
+    src: &str,
+    width: Option<f32>,
+    height: Option<f32>,
+    rc: &mut RenderCtx<'_>,
+) -> Response {
+    let (path, waiting) = video_source(ui.ctx(), src, rc.base_dir);
+    rc.pending |= waiting;
+    let Some(path) = path else {
+        return ui.label(egui::RichText::new(format!("[video: {src}]")).color(rc.palette.muted));
+    };
+    let state = if waiting {
+        None
+    } else {
+        rc.pictures.video.get(ui.ctx(), &path)
+    };
+    let native = match &state {
+        Some(super::video::VideoState::Ready(frame)) => frame.size,
+        _ => vec2(640.0, 360.0),
+    };
+    let available = ui.available_width().max(16.0);
+    let requested = match (width, height) {
+        (Some(w), Some(h)) => vec2(w, h),
+        (Some(w), None) => vec2(w, native.y * w / native.x),
+        (None, Some(h)) => vec2(native.x * h / native.y, h),
+        (None, None) => native,
+    };
+    let size = requested * (available / requested.x).min(1.0);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    match state {
+        Some(super::video::VideoState::Ready(frame)) => draw_video_at(ui, &path, &frame, rect, rc),
+        Some(super::video::VideoState::Failed(error)) => {
+            ui.put(rect, Label::new(format!("[video error: {error}]")))
+        }
+        _ => {
+            rc.pending = true;
+            ui.put(rect, egui::Spinner::new())
+        }
+    }
+}
+
+/// A video occupies just its picture rectangle. Playback controls overlay it
+/// on hover and never take space away from the gallery or move adjacent rows.
+fn draw_video_at(
+    ui: &mut Ui,
+    path: &Path,
+    frame: &super::video::VideoFrame,
+    rect: Rect,
+    rc: &mut RenderCtx<'_>,
+) -> Response {
+    if ui.is_rect_visible(rect) && !ui.ctx().will_discard() {
+        rc.pictures.video.mark_visible(ui.ctx().viewport_id(), path);
+    }
+    let response = ui.put(
+        rect,
+        egui::Image::new((frame.texture.id(), frame.size))
+            .fit_to_exact_size(rect.size())
+            .corner_radius(6)
+            .sense(Sense::click()),
+    );
+    let bar = Rect::from_min_max(
+        pos2(rect.left(), (rect.bottom() - 32.0).max(rect.top())),
+        rect.max,
+    );
+    let controls_id = ui.id().with(("video-controls", path));
+    let pointer_over = ui
+        .ctx()
+        .pointer_hover_pos()
+        .is_some_and(|pos| rect.contains(pos))
+        && ui.is_rect_visible(rect);
+    let dragging = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(controls_id).unwrap_or(false))
+        && ui.input(|input| input.pointer.primary_down());
+    let show_controls = pointer_over || dragging;
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(controls_id, show_controls));
+    if response.clicked()
+        && !ui
+            .ctx()
+            .pointer_hover_pos()
+            .is_some_and(|pos| bar.contains(pos))
+    {
+        rc.pictures.video.toggle(path);
+    }
+    if show_controls {
+        ui.painter()
+            .rect_filled(bar, 6, Color32::from_black_alpha(190));
+        ui.scope_builder(
+            UiBuilder::new()
+                .id_salt(controls_id)
+                .max_rect(bar.shrink(3.0))
+                .layout(Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(bar));
+                ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+                let icon = if frame.playing { "⏸" } else { "▶" };
+                if ui
+                    .button(icon)
+                    .on_hover_text(if frame.playing {
+                        tr!("Pause", "Пауза")
+                    } else {
+                        tr!("Play", "Воспроизвести")
+                    })
+                    .clicked()
+                {
+                    rc.pictures.video.toggle(path);
+                }
+                if bar.width() > 130.0 && frame.duration > 0.0 {
+                    ui.spacing_mut().slider_width = (bar.width() - 110.0).max(20.0);
+                    let mut position = frame.position / frame.duration;
+                    if ui
+                        .add(egui::Slider::new(&mut position, 0.0..=1.0).show_value(false))
+                        .changed()
+                    {
+                        rc.pictures.video.seek(path, position);
+                    }
+                    ui.label(format!("{:.1}/{:.1}s", frame.position, frame.duration));
+                }
+            },
+        );
+    }
+    response
+}
+
+/// A local attachment can be elsewhere in the Obsidian vault, just like an image.
+fn video_source(ctx: &egui::Context, src: &str, base: Option<&Path>) -> (Option<PathBuf>, bool) {
+    let Some(path) = video_path(src, base) else {
+        return (None, false);
+    };
+    if !path.is_file()
+        && let (Some(base), Some(relative)) = (base, relative_source(src))
+    {
+        match crate::vault::locate(base, &relative, ctx) {
+            crate::vault::Located::Found(found) => return (Some(found), false),
+            crate::vault::Located::Waiting => return (Some(path), true),
+            crate::vault::Located::Missing => {}
+        }
+    }
+    (Some(path), false)
+}
+
+fn video_path(src: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
+    let src = src.trim();
+    if src.is_empty() {
+        return None;
+    }
+    // A Markdown destination is URL-encoded, including local paths. Split
+    // query/fragment before decoding so %23 stays part of the file name.
+    let path_part = src.split(['?', '#']).next().unwrap_or(src);
+    let decoded = if let Some(path) = crate::app::file_url_path(path_part) {
+        path
+    } else {
+        if crate::app::has_url_scheme(path_part) {
+            return None;
+        }
+        percent_decode(path_part)
+    };
+    if decoded.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(decoded);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        base_dir?.join(path)
+    };
+    if crate::ui::confirm::on_another_host(&path, base_dir) {
+        return None;
+    }
+    Some(path)
 }
 
 fn code_job(code: &str, highlights: Option<&[HlSpan]>, rc: &RenderCtx<'_>, id: u32) -> LayoutJob {
@@ -2948,6 +3167,11 @@ fn estimate(block: &Block, width: f32) -> f32 {
         Block::Rule => body_size() + gap,
         Block::Details { .. } => line + gap,
         Block::DetailsEnd => 0.0,
+        Block::Video { width, height, .. } => {
+            let w = width.unwrap_or(640.0);
+            let h = height.unwrap_or_else(|| w * 9.0 / 16.0);
+            h + gap + 50.0
+        }
         Block::Gallery { masonry, images } => {
             let rows = if *masonry {
                 images.len().div_ceil(GALLERY_COLUMNS) as f32 * width / GALLERY_COLUMNS as f32
@@ -2975,6 +3199,241 @@ pub fn block_top(view: &ViewState, block: usize) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct VideoUiTest {
+        ctx: egui::Context,
+        pictures: Pictures,
+        palette: Palette,
+        fonts: FontChoice,
+        highlighter: Highlighter,
+        find: FindState,
+        base: PathBuf,
+        src: String,
+    }
+
+    impl VideoUiTest {
+        fn new(base: PathBuf, src: String) -> Self {
+            Self {
+                ctx: egui::Context::default(),
+                pictures: Pictures {
+                    math: MathRenderer::new(|| {}),
+                    emoji: EmojiRenderer::new(|| {}),
+                    diagrams: DiagramRenderer::new(|| {}),
+                    video: super::super::video::VideoPlayer::new(|| {}),
+                },
+                palette: Palette::new(false, crate::settings::DarkStyle::Grey),
+                fonts: FontChoice::default(),
+                highlighter: Highlighter::new(|| {}),
+                find: FindState::default(),
+                base,
+                src,
+            }
+        }
+
+        fn render(&mut self, invisible: bool, events: Vec<egui::Event>) {
+            if !invisible {
+                self.pictures.video.begin_view(egui::ViewportId::ROOT);
+            }
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 1200.0))),
+                events,
+                ..Default::default()
+            };
+            self.ctx
+                .run_ui(raw, |ui| {
+                    let mut rc = RenderCtx::new(
+                        &self.palette,
+                        &self.fonts,
+                        0,
+                        &self.highlighter,
+                        &mut self.pictures,
+                        Some(&self.base),
+                        &self.find,
+                    );
+                    let builder = if invisible {
+                        UiBuilder::new().invisible()
+                    } else {
+                        UiBuilder::new()
+                    };
+                    ui.scope_builder(builder, |ui| draw_video(ui, &self.src, None, None, &mut rc));
+                })
+                .drop_without_applying_deltas();
+            if !invisible {
+                self.pictures.video.end_view();
+            }
+        }
+
+        fn click_video(&mut self) {
+            let pos = pos2(20.0, 20.0);
+            self.render(false, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                self.render(
+                    false,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::default(),
+                    }],
+                );
+            }
+        }
+
+        fn render_gallery(&mut self, images: &[ImageRef], masonry: bool, hover: bool) -> f32 {
+            self.pictures.video.begin_view(egui::ViewportId::ROOT);
+            let mut height = 0.0;
+            self.ctx
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(1200.0, 1200.0),
+                        )),
+                        events: if hover {
+                            vec![egui::Event::PointerMoved(pos2(350.0, 20.0))]
+                        } else {
+                            vec![egui::Event::PointerGone]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut rc = RenderCtx::new(
+                            &self.palette,
+                            &self.fonts,
+                            0,
+                            &self.highlighter,
+                            &mut self.pictures,
+                            Some(&self.base),
+                            &self.find,
+                        );
+                        draw_gallery(ui, masonry, images, &mut rc);
+                        height = ui.min_rect().height();
+                    },
+                )
+                .drop_without_applying_deltas();
+            self.pictures.video.end_view();
+            height
+        }
+    }
+
+    #[test]
+    fn drawing_video_progress_does_not_seek_or_pause() {
+        use super::super::video::{VideoPlayer, VideoState};
+        for invisible in [false, true] {
+            let mut ui = VideoUiTest::new(std::env::temp_dir(), "clip.mp4".into());
+            let path = ui.base.join(&ui.src);
+            ui.pictures.video = VideoPlayer::test_playing(&ui.ctx, &path, 0.037);
+            ui.render(invisible, vec![]);
+            let Some(VideoState::Ready(frame)) = ui.pictures.video.get(&ui.ctx, &path) else {
+                panic!("a prepared video frame");
+            };
+            assert!(
+                frame.playing,
+                "rendering must not pause video (invisible={invisible})"
+            );
+            assert_eq!(frame.position, 0.037, "rendering must not seek video");
+        }
+    }
+
+    #[test]
+    fn clicking_the_video_toggles_playback_in_the_ui() {
+        use super::super::video::{VideoPlayer, VideoState};
+        let mut ui = VideoUiTest::new(std::env::temp_dir(), "clip.mp4".into());
+        let path = ui.base.join(&ui.src);
+        ui.pictures.video = VideoPlayer::test_playing(&ui.ctx, &path, 0.037);
+        ui.render(false, vec![]);
+        for playing in [false, true] {
+            ui.click_video();
+            let Some(VideoState::Ready(frame)) = ui.pictures.video.get(&ui.ctx, &path) else {
+                panic!("a prepared video frame");
+            };
+            assert_eq!(frame.playing, playing);
+            assert_eq!(frame.position, 0.037);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn mixed_galleries_autoplay_multiple_videos_and_loop_without_changing_layout() {
+        use super::super::video::VideoState;
+        let root =
+            std::env::temp_dir().join(format!("metalmd-live-gallery-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = include_bytes!("../../tests/fixtures/video-h264.mp4");
+        for name in ["a.mp4", "b.mp4"] {
+            std::fs::write(root.join(name), fixture).unwrap();
+        }
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([30, 150, 230, 255]))
+            .save(root.join("still.png"))
+            .unwrap();
+        for masonry in [false, true] {
+            let doc = Document::parse(&format!(
+                "> [!{}]\n> ![[still.png]] ![[a.mp4]]\n> ![[b.mp4]]",
+                if masonry {
+                    "gallery-masonry"
+                } else {
+                    "gallery"
+                }
+            ));
+            let Block::Gallery { images, .. } = &doc.blocks[0] else {
+                panic!("mixed gallery")
+            };
+            let mut ui = VideoUiTest::new(root.clone(), String::new());
+            egui_extras::install_image_loaders(&ui.ctx);
+            let paths = [root.join("a.mp4"), root.join("b.mp4")];
+            let mut previous = [0.0; 2];
+            let mut looped = [false; 2];
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !looped.iter().all(|value| *value) {
+                ui.render_gallery(images, masonry, false);
+                for (index, path) in paths.iter().enumerate() {
+                    match ui.pictures.video.get(&ui.ctx, path) {
+                        Some(VideoState::Ready(frame)) => {
+                            if frame.position < previous[index] && previous[index] > 1.5 {
+                                looped[index] = true;
+                            }
+                            previous[index] = frame.position;
+                        }
+                        Some(VideoState::Failed(error)) => panic!("{error}"),
+                        _ => {}
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "both visible videos must autoplay and loop"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let height = ui.render_gallery(images, masonry, false);
+            let hovered = ui.render_gallery(images, masonry, true);
+            assert!(
+                (height - hovered).abs() < 0.1,
+                "hover controls must not move gallery rows"
+            );
+
+            ui.pictures.video.toggle(&paths[0]);
+            ui.render_gallery(images, masonry, false);
+            assert!(matches!(ui.pictures.video.get(&ui.ctx, &paths[0]),
+                Some(VideoState::Ready(frame)) if !frame.playing));
+            assert!(matches!(ui.pictures.video.get(&ui.ctx, &paths[1]),
+                Some(VideoState::Ready(frame)) if frame.playing));
+            ui.pictures.video.begin_view(egui::ViewportId::ROOT);
+            ui.pictures.video.end_view();
+            for path in &paths {
+                assert!(matches!(ui.pictures.video.get(&ui.ctx, path),
+                    Some(VideoState::Ready(frame)) if !frame.playing));
+            }
+            ui.render_gallery(images, masonry, false);
+            assert!(matches!(ui.pictures.video.get(&ui.ctx, &paths[0]),
+                Some(VideoState::Ready(frame)) if !frame.playing));
+            assert!(matches!(ui.pictures.video.get(&ui.ctx, &paths[1]),
+                Some(VideoState::Ready(frame)) if frame.playing));
+        }
+        for name in ["a.mp4", "b.mp4", "still.png"] {
+            std::fs::remove_file(root.join(name)).unwrap();
+        }
+        std::fs::remove_dir(root).unwrap();
+    }
 
     #[test]
     fn find_unfolds_the_callouts_around_its_match() {
@@ -3064,6 +3523,138 @@ mod tests {
         } else {
             assert_eq!(uri, "file:///docs/img/my pic.png");
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn video_file_urls_and_absolute_paths_keep_their_location() {
+        let expected = PathBuf::from("C:/My Videos/clip #100%.mp4");
+        for source in [
+            "file:///C:/My%20Videos/clip%20%23100%25.mp4",
+            "FILE:/C:/My%20Videos/clip%20%23100%25.mp4",
+            "C:/My%20Videos/clip%20%23100%25.mp4",
+        ] {
+            assert_eq!(video_path(source, None), Some(expected.clone()));
+        }
+        let share = Path::new(r"\\srv\docs");
+        assert_eq!(
+            video_path("file://srv/docs/My%20clip.mp4", Some(share)),
+            Some(PathBuf::from("//srv/docs/My clip.mp4"))
+        );
+        assert_eq!(video_path("file://other/docs/clip.mp4", Some(share)), None);
+    }
+
+    #[test]
+    fn video_paths_decode_url_escapes_once() {
+        let base = Path::new("docs");
+        for (source, relative) in [
+            (
+                "!assets/Video%20test/clip.mp4",
+                "!assets/Video test/clip.mp4",
+            ),
+            ("%D1%82%D0%B5%D1%81%D1%82.mp4", "тест.mp4"),
+            ("clip%23name%25.mp4?download=1#t=2", "clip#name%.mp4"),
+            ("literal%2520.mp4", "literal%20.mp4"),
+        ] {
+            assert_eq!(video_path(source, Some(base)), Some(base.join(relative)));
+        }
+        for source in [
+            "",
+            "#t=2",
+            "https://example.com/clip.mp4",
+            "data:video/mp4,AAAA",
+        ] {
+            assert_eq!(video_path(source, Some(base)), None);
+        }
+        assert_eq!(video_path("clip.mp4", None), None);
+    }
+
+    #[test]
+    #[ignore = "set METALMD_TEST_DOCUMENT to a Markdown file containing a video"]
+    fn external_document_video_decodes_and_plays() {
+        use super::super::video::VideoState;
+        let document = PathBuf::from(std::env::var_os("METALMD_TEST_DOCUMENT").unwrap());
+        let text = crate::fs_text::read_to_string_lossy(&document).unwrap();
+        let doc = Document::parse(&text.content);
+        let src = doc
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                Block::Video { src, .. } => Some(src),
+                _ => None,
+            })
+            .expect("a video block in the document");
+        let path = video_path(src, document.parent()).expect("a local video path");
+        assert!(path.is_file(), "video not found: {}", path.display());
+        println!("resolved video: {}", path.display());
+
+        let mut ui = VideoUiTest::new(document.parent().unwrap().to_owned(), src.clone());
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let preview = loop {
+            ui.render(false, vec![]);
+            match ui.pictures.video.get(&ui.ctx, &path) {
+                Some(VideoState::Ready(frame)) => break frame,
+                Some(VideoState::Failed(error)) => panic!("{error}"),
+                _ => {}
+            }
+            assert!(Instant::now() < deadline, "video preview timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        println!(
+            "decoded preview: {}x{}, duration {:.3}s, pts {:.3}s",
+            preview.size.x, preview.size.y, preview.duration, preview.position
+        );
+        assert!(preview.size.x > 0.0 && preview.size.y > 0.0);
+        ui.render(false, vec![]);
+        assert!(matches!(ui.pictures.video.get(&ui.ctx, &path),
+            Some(VideoState::Ready(frame)) if frame.playing));
+        let mut positions = vec![preview.position];
+        loop {
+            // The renderer also measures blocks invisibly. Neither rendering
+            // pass may generate a Seek/Pause without user input.
+            ui.render(false, vec![]);
+            ui.render(true, vec![]);
+            match ui.pictures.video.get(&ui.ctx, &path) {
+                Some(VideoState::Ready(frame)) => {
+                    if frame.position < *positions.last().unwrap() && positions.len() > 2 {
+                        println!("autoplay looped: {} frames observed", positions.len());
+                        assert!(*positions.last().unwrap() >= preview.duration - 0.2);
+                        assert!(frame.playing);
+                        break;
+                    }
+                    if positions.last().copied() != Some(frame.position) {
+                        positions.push(frame.position);
+                    }
+                }
+                Some(VideoState::Failed(error)) => panic!("{error}"),
+                _ => {}
+            }
+            assert!(Instant::now() < deadline, "video playback timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn markdown_video_in_a_folder_with_spaces_opens_the_real_file() {
+        let root = std::env::temp_dir().join(format!("metalmd-video-path-{}", std::process::id()));
+        let folder = root.join("!assets/Video test");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("qrec_2026-11-02_12-15-38.mp4");
+        let fixture = include_bytes!("../../tests/fixtures/video-h264.mp4");
+        std::fs::write(&file, fixture).unwrap();
+        let doc = Document::parse(
+            "![qrec_2026-11-02_12-15-38.mp4](!assets/Video%20test/qrec_2026-11-02_12-15-38.mp4)",
+        );
+        let Block::Video { src, .. } = &doc.blocks[0] else {
+            panic!("expected a video block");
+        };
+        let resolved = video_path(src, Some(&root)).unwrap();
+        assert_eq!(resolved, file);
+        assert_eq!(std::fs::read(resolved).unwrap(), fixture);
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(folder).unwrap();
+        std::fs::remove_dir(root.join("!assets")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 
     #[cfg(windows)]

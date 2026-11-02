@@ -18,6 +18,7 @@ pub mod selection;
 pub mod svg;
 pub mod text;
 pub mod toc;
+pub mod video;
 pub mod viewer;
 
 use crate::settings::{DarkStyle, ThemeSetting, TocSide};

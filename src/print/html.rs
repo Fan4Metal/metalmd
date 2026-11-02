@@ -98,6 +98,7 @@ fn code_blocks(blocks: &[Block]) -> Vec<(&str, &str)> {
                         }
                     }
                 }
+                Block::Video { .. } => {}
                 _ => {}
             }
         }
@@ -393,6 +394,14 @@ impl<'d> Writer<'d> {
                     self.out.push_str("</details>\n");
                 }
             }
+            Block::Video { src, .. } => {
+                let _ = writeln!(
+                    self.out,
+                    "<p{id_attr}><a href=\"{}\">[video: {}]</a></p>",
+                    escape(&self.href(src)),
+                    escape(src)
+                );
+            }
         }
     }
 
@@ -561,6 +570,15 @@ impl<'d> Writer<'d> {
     }
 
     fn image(&mut self, image: &ImageRef) {
+        if crate::markdown::document::is_video_file(&image.src) {
+            let _ = write!(
+                self.out,
+                "<a href=\"{}\">[video: {}]</a>",
+                escape(&self.href(&image.src)),
+                escape(&image.src)
+            );
+            return;
+        }
         let base = self.options.base_dir.as_deref();
         let Some(src) = image_url(&image.src, base) else {
             let alt = if image.alt.is_empty() {

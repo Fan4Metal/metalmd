@@ -766,6 +766,7 @@ mod tests {
             math: crate::ui::math::MathRenderer::new(|| {}),
             emoji: crate::ui::emoji::EmojiRenderer::new(|| {}),
             diagrams: crate::ui::diagram::DiagramRenderer::new(|| {}),
+            video: crate::ui::video::VideoPlayer::new(|| {}),
         };
         let palette = Palette::new(false, crate::settings::DarkStyle::Grey);
         let mut options = ViewerSettings::default();

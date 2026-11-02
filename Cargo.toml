@@ -1,6 +1,6 @@
 [package]
 name = "metalmd"
-version = "0.3.0"
+version = "0.4.0-dev"
 authors = ["Fan4_Metal"]
 edition = "2024"
 description = "Fast Markdown viewer for Windows"
@@ -49,8 +49,11 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_LibraryLoader",
+    "Win32_System_Variant",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

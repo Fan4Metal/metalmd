@@ -23,6 +23,8 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 
 ## Features
 
+- **Videos as animated pictures**: local video embeds autoplay silently on a loop, including mixed image/video `[!gallery]` and `[!gallery-masonry]` callouts. Several visible clips can play together. Controls overlay the video only on hover; clips pause outside the viewport or in inactive tabs and resume on return, while a manual pause is kept. Video format support comes from Windows Media Foundation.
+
 - **Fast**: the document appears about 0.2 s after start-up, for a 27 KB note as for a 5 MB log (see [Start-up speed](#start-up-speed)).
 - **GitHub-flavoured Markdown**: tables, task lists, strikethrough, autolinks, footnotes, `> [!NOTE]` alerts and front matter, through [comrak](https://github.com/kivikakk/comrak).
 - **Obsidian and Markpad syntax**: `[[Note]]` and `[[Note#Heading|alias]]` wikilinks, `![[image.png|300x200]]` embeds, `![alt|300x200](image.png)` sizes, `^block-id` anchors, `==highlight==`, `++insert++`, `^[inline footnotes]` and definition lists. A single newline is a line break (see [Supported Markdown](#supported-markdown)).
@@ -55,7 +57,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 |---|---|
 | CommonMark | `**bold**`, `*italic*`, `` `code` ``, headings, lists, quotes, rules, links, images |
 | GitHub extensions | tables, `- [x]` task lists, `~~strikethrough~~`, bare URLs, `[^1]` footnotes, `> [!NOTE]` alerts |
-| Obsidian | `[[Note]]` and `[[Note#Heading\|alias]]` wikilinks (a bare `[[1]]` with `[1]: url` defined stays a CommonMark link in brackets); in a vault (a folder with `.obsidian`), a linked note or image that is not where the link says is found anywhere in the vault by the end of its path, as Obsidian finds it, and a link to a file found nowhere is fainter, `![[image.png\|300x200]]` embeds, embedded notes `![[Note]]`, `![[Note#Heading]]` and `![[Note#^id]]` (alone in a paragraph: the note, the section under the heading or the block, in a frame with the note's name, which opens it; their task boxes cannot be ticked, and "Copy as Markdown" and highlighting refuse their text, which is another file's), `![alt\|300x200](image.png)` sizes, `^block-id` anchors, `%%comments%%` hidden, `#tags` and `#nested/tags` tinted (a click finds the tag in the document), embeds of other files (`![[report.pdf]]`, `![table](data.xlsx)`, sound, video) as links that open the file, task statuses `[/]` (half filled), `[-]` (a dash) and any other mark in its box (shown, not ticked), `> [!info]` callouts of every type in the colour of the nearest GitHub alert, folded with `[!type]-` and foldable with `[!type]+` (a click on the title row folds and unfolds them), `> [!gallery]` and `> [!gallery-masonry]` callouts of pictures in justified rows or columns, as the Media Gallery plugin lays them out |
+| Obsidian | `[[Note]]` and `[[Note#Heading\|alias]]` wikilinks (a bare `[[1]]` with `[1]: url` defined stays a CommonMark link in brackets); in a vault (a folder with `.obsidian`), a linked note or image that is not where the link says is found anywhere in the vault by the end of its path, as Obsidian finds it, and a link to a file found nowhere is fainter, `![[image.png\|300x200]]` embeds, embedded notes `![[Note]]`, `![[Note#Heading]]` and `![[Note#^id]]` (alone in a paragraph: the note, the section under the heading or the block, in a frame with the note's name, which opens it; their task boxes cannot be ticked, and "Copy as Markdown" and highlighting refuse their text, which is another file's), `![alt\|300x200](image.png)` sizes, `^block-id` anchors, `%%comments%%` hidden, `#tags` and `#nested/tags` tinted (a click finds the tag in the document), embeds of other files (`![[report.pdf]]`, `![table](data.xlsx)`, sound) as links that open the file, task statuses `[/]` (half filled), `[-]` (a dash) and any other mark in its box (shown, not ticked), `> [!info]` callouts of every type in the colour of the nearest GitHub alert, folded with `[!type]-` and foldable with `[!type]+` (a click on the title row folds and unfolds them), `> [!gallery]` and `> [!gallery-masonry]` callouts of pictures and videos in justified rows or columns, as the Media Gallery plugin lays them out |
 | Other extensions | `==highlight==`, `++insert++`, `^[inline footnote]`, definition lists, YAML front matter, shown as Obsidian's Properties (a row per key; lists as chips, `"[[Note]]"` and web addresses as links) when it is the flat YAML Obsidian writes, else as YAML |
 | Math | `$E = mc^2$` or ``$`E = mc^2`$`` inline, `$$ … $$` on its own lines or a ```` ```math ```` block, LaTeX as [KaTeX](https://katex.org/docs/supported) supports it |
 | Diagrams | ```` ```mermaid ```` blocks: the diagram types of [mermaid-svg](https://github.com/xmiksay/mermaid) |
@@ -65,7 +67,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 
 **Not supported**:
 
-- video, audio and YouTube previews: they are not shown, an embedded file is a link to it;
+- audio playback and YouTube previews: an embedded file is a link to it;
 - `data:` images;
 - HTML beyond the tags above;
 - flag emoji in colour: Segoe UI Emoji has no flags, so 🇷🇺 shows as the letters RU, as in browsers on Windows.
