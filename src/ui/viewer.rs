@@ -863,7 +863,7 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             src,
             content,
         } => draw_embed(ui, title, src, content.as_ref(), rc, salt),
-        Block::Gallery { masonry, images } => draw_gallery(ui, *masonry, images, rc),
+        Block::Gallery { masonry, images } => draw_gallery(ui, *masonry, images, rc, salt),
         Block::Video { src, width, height } => {
             draw_video(ui, src, *width, *height, rc);
         }
@@ -1078,7 +1078,13 @@ fn masonry_columns(aspects: &[f32], width: f32, columns: usize, gap: f32) -> Vec
 
 /// A gallery callout: its pictures in justified rows or masonry columns,
 /// each shown on its own with a click. A picture not loaded yet takes 4:3.
-fn draw_gallery(ui: &mut Ui, masonry: bool, images: &[ImageRef], rc: &mut RenderCtx<'_>) {
+fn draw_gallery(
+    ui: &mut Ui,
+    masonry: bool,
+    images: &[ImageRef],
+    rc: &mut RenderCtx<'_>,
+    salt: u64,
+) {
     let width = ui.available_width();
     let items: Vec<_> = images
         .iter()
@@ -1132,7 +1138,9 @@ fn draw_gallery(ui: &mut Ui, masonry: bool, images: &[ImageRef], rc: &mut Render
     };
     let height = rects.iter().map(|r| r.bottom()).fold(0.0, f32::max);
     let (area, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    for (((uri, path, state, _), rect), image) in items.iter().zip(&rects).zip(images) {
+    for (index, (((uri, path, state, _), rect), image)) in
+        items.iter().zip(&rects).zip(images).enumerate()
+    {
         let rect = rect.translate(area.min.to_vec2());
         if !ui.is_rect_visible(rect) {
             continue;
@@ -1140,7 +1148,15 @@ fn draw_gallery(ui: &mut Ui, masonry: bool, images: &[ImageRef], rc: &mut Render
         if is_video_file(&image.src) {
             match (path, state) {
                 (Some(path), Some(super::video::VideoState::Ready(frame))) => {
-                    draw_video_at(ui, path, frame, rect, rc);
+                    // Every embed owns its controls even when several tiles
+                    // share one decoder. Hovering an earlier tile must not
+                    // change the auto-IDs of a later tile's buttons.
+                    let mut item_ui = ui.new_child(
+                        UiBuilder::new()
+                            .id(ui.id().with(("gallery-video", salt, index)))
+                            .max_rect(rect),
+                    );
+                    draw_video_at(&mut item_ui, path, frame, rect, rc);
                 }
                 (_, Some(super::video::VideoState::Failed(error))) => {
                     ui.put(rect, Label::new(format!("[video error: {error}]")));
@@ -3429,6 +3445,23 @@ mod tests {
         }
 
         fn render_gallery(&mut self, images: &[ImageRef], masonry: bool, hover: bool) -> f32 {
+            self.render_gallery_events(
+                images,
+                masonry,
+                if hover {
+                    vec![egui::Event::PointerMoved(pos2(350.0, 20.0))]
+                } else {
+                    vec![egui::Event::PointerGone]
+                },
+            )
+        }
+
+        fn render_gallery_events(
+            &mut self,
+            images: &[ImageRef],
+            masonry: bool,
+            events: Vec<egui::Event>,
+        ) -> f32 {
             self.pictures.video.begin_view(egui::ViewportId::ROOT);
             let mut height = 0.0;
             self.ctx
@@ -3438,11 +3471,7 @@ mod tests {
                             egui::Pos2::ZERO,
                             vec2(1200.0, 1200.0),
                         )),
-                        events: if hover {
-                            vec![egui::Event::PointerMoved(pos2(350.0, 20.0))]
-                        } else {
-                            vec![egui::Event::PointerGone]
-                        },
+                        events,
                         ..Default::default()
                     },
                     |ui| {
@@ -3455,7 +3484,8 @@ mod tests {
                             Some(&self.base),
                             &self.find,
                         );
-                        draw_gallery(ui, masonry, images, &mut rc);
+                        draw_gallery(ui, masonry, images, &mut rc, 0);
+                        self.actions = rc.actions;
                         height = ui.min_rect().height();
                     },
                 )
@@ -3512,6 +3542,73 @@ mod tests {
         assert_eq!(ui.actions, [ViewAction::ShowVideo(path.clone())]);
         assert!(matches!(ui.pictures.video.get(&ui.ctx, &path),
             Some(VideoState::Ready(frame)) if frame.playing && frame.position == 0.037));
+    }
+
+    #[test]
+    fn each_repeated_gallery_video_has_its_own_expand_button() {
+        use super::super::video::{VideoPlayer, VideoState};
+        let doc = Document::parse(&format!("> [!gallery]\n{}", "> ![](clip.mp4)\n".repeat(7)));
+        let Block::Gallery { images, .. } = &doc.blocks[0] else {
+            panic!("a video gallery")
+        };
+        for masonry in [false, true] {
+            let mut ui = VideoUiTest::new(std::env::temp_dir(), "clip.mp4".into());
+            let path = ui.base.join(&ui.src);
+            ui.pictures.video = VideoPlayer::test_playing(&ui.ctx, &path, 0.037);
+            ui.render_gallery(images, masonry, false);
+            let rects = if masonry {
+                masonry_columns(&[1.0; 7], 1200.0, GALLERY_COLUMNS, GALLERY_GAP)
+            } else {
+                justified_rows(
+                    &[1.0; 7],
+                    1200.0,
+                    GALLERY_ROW * body_size() / 16.0,
+                    GALLERY_GAP,
+                )
+            };
+            for (index, rect) in rects.iter().enumerate() {
+                let pos = rect.right_top() + vec2(-16.0, 16.0);
+                ui.render_gallery_events(images, masonry, vec![egui::Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    ui.render_gallery_events(
+                        images,
+                        masonry,
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                    if pressed {
+                        for _ in 0..4 {
+                            ui.render_gallery_events(images, masonry, vec![]);
+                        }
+                    }
+                }
+                assert_eq!(
+                    ui.actions,
+                    [ViewAction::ShowVideo(path.clone())],
+                    "video {} in masonry={masonry} must open",
+                    index + 1
+                );
+                assert!(matches!(ui.pictures.video.get(&ui.ctx, &path),
+                    Some(VideoState::Ready(frame)) if frame.playing && frame.position == 0.037));
+                assert!(ui.render_theater(&path, vec![]));
+                assert!(!ui.render_theater(
+                    &path,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: Some(egui::Key::Escape),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }]
+                ));
+                ui.render_gallery(images, masonry, false);
+                ui.render_gallery(images, masonry, false);
+            }
+        }
     }
 
     #[test]
