@@ -173,6 +173,8 @@ pub struct Settings {
     pub mark_color: Option<String>,
     /// The same in the dark theme.
     pub mark_color_dark: Option<String>,
+    /// Start visible videos automatically, unless manually paused.
+    pub video_autoplay: bool,
     /// Check for a newer release at start-up, at most once a day; off
     /// until turned on in About.
     pub check_updates: bool,
@@ -213,6 +215,7 @@ impl Default for Settings {
             text_width: crate::style::DEFAULT_CONTENT_WIDTH,
             mark_color: None,
             mark_color_dark: None,
+            video_autoplay: true,
             check_updates: false,
             last_update_check: 0,
             session: Vec::new(),
@@ -480,6 +483,7 @@ mod tests {
             dark_style: DarkStyle::Black,
             zoom: 1.25,
             toc_side: TocSide::Right,
+            video_autoplay: false,
             ..Settings::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
@@ -488,6 +492,7 @@ mod tests {
         assert_eq!(partial.theme, ThemeSetting::Light);
         assert_eq!(partial.zoom, 1.0);
         assert_eq!(partial.toc_side, TocSide::Left);
+        assert!(partial.video_autoplay);
     }
 
     #[test]

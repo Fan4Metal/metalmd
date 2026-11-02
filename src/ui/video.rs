@@ -2,7 +2,7 @@
 //! no audio.
 //!
 //! A `VideoPlayer` decodes frames on a worker thread and uploads textures to
-//! egui. Visible clips autoplay silently on a loop, like animated images.
+//! egui. Visible clips autoplay silently on a loop when enabled in Settings.
 //! Each viewport reports its visible clips, so scrolling or switching tabs
 //! suspends playback without overriding a pause requested by the reader.
 
@@ -30,6 +30,13 @@ use windows::core::{GUID, HSTRING};
 enum PlayState {
     Paused,
     Playing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaybackIntent {
+    Automatic,
+    ManualPlay,
+    ManualPause,
 }
 
 /// A frame ready to draw.
@@ -72,7 +79,7 @@ struct Video {
     height: u32,
     duration_s: f64,
     state: PlayState,
-    user_paused: bool,
+    intent: PlaybackIntent,
     /// The texture shown now.
     texture: Option<TextureHandle>,
     /// Where we are in the video, in seconds from the start.
@@ -116,6 +123,7 @@ pub struct VideoPlayer {
     sender: Sender<(PathBuf, WorkerMsg)>,
     /// Clips painted by each viewport, excluding invisible measuring passes.
     visible: HashMap<egui::ViewportId, HashSet<PathBuf>>,
+    autoplay: bool,
     repaint: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -131,7 +139,7 @@ impl VideoPlayer {
                 height: 64,
                 duration_s: 2.0,
                 state: PlayState::Playing,
-                user_paused: false,
+                intent: PlaybackIntent::Automatic,
                 texture: Some(ctx.load_texture(
                     "test-video",
                     ColorImage::new([64, 64], vec![egui::Color32::BLACK; 64 * 64]),
@@ -157,6 +165,7 @@ impl VideoPlayer {
             receiver,
             sender,
             visible: HashMap::new(),
+            autoplay: true,
             repaint: Arc::new(repaint),
         }
     }
@@ -199,7 +208,7 @@ impl VideoPlayer {
                     height: 0,
                     duration_s: 0.0,
                     state: PlayState::Paused,
-                    user_paused: false,
+                    intent: PlaybackIntent::Automatic,
                     texture: None,
                     position: 0.0,
                     worker_tx,
@@ -264,6 +273,23 @@ impl VideoPlayer {
         }))
     }
 
+    /// Stop automatically started clips when disabled; manual playback stays
+    /// available. Visible clips resume on the next draw when enabled again.
+    pub fn set_autoplay(&mut self, enabled: bool) {
+        if self.autoplay == enabled {
+            return;
+        }
+        self.autoplay = enabled;
+        if !enabled {
+            for video in self.videos.lock().expect("video lock").values_mut() {
+                if video.intent == PlaybackIntent::Automatic {
+                    video.pause();
+                }
+            }
+        }
+        (self.repaint)();
+    }
+
     /// Begin collecting visible clips for one window's active document.
     pub fn begin_view(&mut self, viewport: egui::ViewportId) {
         if let Some(paths) = self.visible.get_mut(&viewport) {
@@ -271,14 +297,15 @@ impl VideoPlayer {
         }
     }
 
-    /// Autoplay a clip actually painted on screen, unless the reader paused it.
+    /// Resume a visible clip according to autoplay and the reader's intent.
     pub fn mark_visible(&mut self, viewport: egui::ViewportId, path: &Path) {
         self.visible
             .entry(viewport)
             .or_default()
             .insert(path.to_owned());
         if let Some(video) = self.videos.lock().expect("video lock").get_mut(path)
-            && !video.user_paused
+            && (video.intent == PlaybackIntent::ManualPlay
+                || (self.autoplay && video.intent == PlaybackIntent::Automatic))
             && video.error.is_none()
         {
             video.play();
@@ -307,11 +334,11 @@ impl VideoPlayer {
         if let Some(video) = videos.get_mut(path) {
             match video.state {
                 PlayState::Paused => {
-                    video.user_paused = false;
+                    video.intent = PlaybackIntent::ManualPlay;
                     video.play();
                 }
                 PlayState::Playing => {
-                    video.user_paused = true;
+                    video.intent = PlaybackIntent::ManualPause;
                     video.pause();
                 }
             }
@@ -322,7 +349,7 @@ impl VideoPlayer {
     pub fn seek(&mut self, path: &Path, position: f64) {
         let mut videos = self.videos.lock().expect("video lock");
         if let Some(video) = videos.get_mut(path) {
-            video.user_paused = true;
+            video.intent = PlaybackIntent::ManualPause;
             video.seek(position * video.duration_s);
         }
     }
@@ -734,7 +761,7 @@ mod tests {
                 height: 32,
                 duration_s: 2.0,
                 state: PlayState::Paused,
-                user_paused: false,
+                intent: PlaybackIntent::Automatic,
                 texture: None,
                 position: 0.0,
                 worker_tx,
@@ -745,11 +772,52 @@ mod tests {
         assert!(matches!(worker_rx.try_recv(), Ok(WorkerCmd::Play)));
         player.toggle(&path);
         assert!(matches!(worker_rx.try_recv(), Ok(WorkerCmd::Pause)));
-        assert!(player.videos.lock().unwrap()[&path].user_paused);
+        assert_eq!(
+            player.videos.lock().unwrap()[&path].intent,
+            PlaybackIntent::ManualPause
+        );
         assert_eq!(
             player.videos.lock().unwrap()[&path].state,
             PlayState::Paused
         );
+    }
+
+    #[test]
+    fn disabling_autoplay_preserves_manual_play_and_pause_across_visibility() {
+        let ctx = Context::default();
+        let path = PathBuf::from("clip.mp4");
+        let root = egui::ViewportId::ROOT;
+        let mut player = VideoPlayer::test_playing(&ctx, &path, 0.5);
+        let state = |player: &VideoPlayer| player.videos.lock().unwrap()[&path].state;
+
+        player.set_autoplay(false);
+        assert_eq!(state(&player), PlayState::Paused);
+        player.mark_visible(root, &path);
+        player.end_view();
+        assert_eq!(state(&player), PlayState::Paused);
+
+        player.set_autoplay(true);
+        player.mark_visible(root, &path);
+        assert_eq!(state(&player), PlayState::Playing);
+        player.toggle(&path);
+        player.set_autoplay(false);
+        player.set_autoplay(true);
+        player.mark_visible(root, &path);
+        assert_eq!(state(&player), PlayState::Paused);
+
+        player.set_autoplay(false);
+        player.toggle(&path);
+        player.mark_visible(root, &path);
+        assert_eq!(state(&player), PlayState::Playing);
+        player.set_autoplay(true);
+        player.set_autoplay(false);
+        assert_eq!(state(&player), PlayState::Playing);
+        player.begin_view(root);
+        player.end_view();
+        assert_eq!(state(&player), PlayState::Paused);
+        player.mark_visible(root, &path);
+        assert_eq!(state(&player), PlayState::Playing);
+        assert_eq!(player.videos.lock().unwrap()[&path].position, 0.5);
     }
 
     #[test]
@@ -768,7 +836,7 @@ mod tests {
                     height: 64,
                     duration_s: 2.0,
                     state: PlayState::Paused,
-                    user_paused: false,
+                    intent: PlaybackIntent::Automatic,
                     texture: None,
                     position: 0.0,
                     worker_tx,

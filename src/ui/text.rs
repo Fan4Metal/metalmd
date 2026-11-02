@@ -1,5 +1,5 @@
-//! The Text panel: the font of the document's text, the font of code, the
-//! text size and the colour of highlighted text. Changes apply at once, so
+//! The Settings panel: fonts, text appearance and video autoplay.
+//! Changes apply at once, so
 //! the document behind the panel shows them.
 
 use crate::fonts::Family;
@@ -31,7 +31,8 @@ pub enum TextChange {
         dark: bool,
         color: Option<Color32>,
     },
-    /// Back to the default fonts, size, width and highlight colours.
+    VideoAutoplay(bool),
+    /// Back to the defaults for every option in this panel.
     Reset,
 }
 
@@ -59,7 +60,7 @@ impl TextPanel {
         let mut open = true;
         let mut change = None;
         // egui titles windows in the heading size, too large for a panel.
-        egui::Window::new(egui::RichText::new(tr!("Text", "Текст")).size(15.0))
+        egui::Window::new(egui::RichText::new(tr!("Settings", "Настройки")).size(15.0))
             .id(Id::new(("text-panel", self.window)))
             .open(&mut open)
             .collapsible(false)
@@ -195,6 +196,23 @@ impl TextPanel {
                             change = Some(TextChange::MarkColor { dark, color: None });
                         }
                         ui.end_row();
+
+                        ui.label(tr!("Video autoplay", "Автовоспроизведение видео"));
+                        let mut autoplay = settings.video_autoplay;
+                        if ui.checkbox(&mut autoplay, "").changed() {
+                            change = Some(TextChange::VideoAutoplay(autoplay));
+                        }
+                        if reset_button(
+                            ui,
+                            "reset-video-autoplay",
+                            !settings.video_autoplay,
+                            tr!("Default (enabled)", "По умолчанию (включено)"),
+                        )
+                        .clicked()
+                        {
+                            change = Some(TextChange::VideoAutoplay(true));
+                        }
+                        ui.end_row();
                     });
                 ui.add_space(4.0);
                 let default = settings.font.is_none()
@@ -202,15 +220,16 @@ impl TextPanel {
                     && settings.text_size == DEFAULT_BODY_SIZE
                     && settings.text_width == DEFAULT_CONTENT_WIDTH
                     && settings.mark_color.is_none()
-                    && settings.mark_color_dark.is_none();
+                    && settings.mark_color_dark.is_none()
+                    && settings.video_autoplay;
                 if ui
                     .add_enabled(
                         !default,
                         egui::Button::new(tr!("Reset all", "Сбросить все")),
                     )
                     .on_hover_text(tr!(
-                        "Reset all text settings",
-                        "Сбросить все настройки текста"
+                        "Reset all settings in this panel",
+                        "Сбросить все настройки в этой панели"
                     ))
                     .clicked()
                 {

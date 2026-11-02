@@ -1909,12 +1909,17 @@ impl App {
                 *chosen = color.map(style::to_hex);
                 self.settings_dirty = true;
             }
+            TextChange::VideoAutoplay(enabled) => {
+                self.settings.video_autoplay = enabled;
+                self.settings_dirty = true;
+            }
             TextChange::Reset => {
                 self.font_request += 1;
                 self.settings.font = None;
                 self.settings.mono_font = None;
                 self.settings.mark_color = None;
                 self.settings.mark_color_dark = None;
+                self.settings.video_autoplay = true;
                 style::set_body_size(style::DEFAULT_BODY_SIZE);
                 self.settings.text_size = style::DEFAULT_BODY_SIZE;
                 style::set_content_width(style::DEFAULT_CONTENT_WIDTH);
@@ -1923,6 +1928,9 @@ impl App {
                 self.reload_fonts(ctx);
             }
         }
+        self.pictures
+            .video
+            .set_autoplay(self.settings.video_autoplay);
     }
 
     /// About is open in the current window.
@@ -2855,6 +2863,9 @@ impl App {
     /// One frame of the current window.
     fn window_ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.pictures
+            .video
+            .set_autoplay(self.settings.video_autoplay);
         self.pictures.video.begin_view(ctx.viewport_id());
         let cur = self.current;
         if cur != 0 {

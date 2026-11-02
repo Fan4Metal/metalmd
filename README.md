@@ -23,7 +23,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 
 ## Features
 
-- **Videos as animated pictures**: local video embeds autoplay silently on a loop, including mixed image/video `[!gallery]` and `[!gallery-masonry]` callouts. Several visible clips can play together. Controls overlay the video only on hover; clips pause outside the viewport or in inactive tabs and resume on return, while a manual pause is kept. A corner button opens the video across the application window, keeping its playback position and aspect ratio; Esc, the close button or a click on the backdrop returns to the document. Video format support comes from Windows Media Foundation.
+- **Videos as animated pictures**: local video embeds autoplay silently on a loop (this can be disabled in Settings), including mixed image/video `[!gallery]` and `[!gallery-masonry]` callouts. Several visible clips can play together. Controls overlay the video only on hover; clips pause outside the viewport or in inactive tabs and resume on return, while a manual pause is kept. A corner button opens the video across the application window, keeping its playback position and aspect ratio; Esc, the close button or a click on the backdrop returns to the document. Video format support comes from Windows Media Foundation.
 
 - **Fast**: the document appears about 0.2 s after start-up, for a 27 KB note as for a 5 MB log (see [Start-up speed](#start-up-speed)).
 - **GitHub-flavoured Markdown**: tables, task lists, strikethrough, autolinks, footnotes, `> [!NOTE]` alerts and front matter, through [comrak](https://github.com/kivikakk/comrak).
@@ -34,7 +34,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 - **Picture viewer**, as the Image Viewer plugin for Obsidian: a click on an image or a diagram shows it over the window, and `←` / `→`, the ‹ › buttons or the thumbnails along the bottom go through all the document's pictures, round from the last to the first; the top row shows "3 / 12" and the file name. The wheel zooms about the pointer (diagrams are drawn again, sharp at any size), and so do `+` and `-`; `0` and a double click go back to the start zoom (a double click there zooms to twice it); a picture larger than the window is moved by dragging; `Esc` or a click beside it closes it. Its context menu shows or hides the thumbnails (landscape, portrait or square, 40 to 160 points high) and arrows, makes the wheel go to the next picture instead (`Ctrl`+wheel then zooms), and sets how a picture opens: fitted without being enlarged, fitted, filling the height or the width, or at 100 %.
 - **Mermaid diagrams** in ```` ```mermaid ```` blocks (flowcharts, sequence, class, state, ER, pie, Gantt and others), drawn by [mermaid-svg](https://github.com/xmiksay/mermaid) in the light or dark Mermaid theme.
 - **README-style HTML**: centred `<p align="center">` blocks, `<img>` with a size, `<kbd>`, `<table>` grids of images and text, `<details>` that opens and closes with a click on its summary, and other tags common in READMEs.
-- **Fonts and text size**: the Aa button opens a panel where the text font, the code font and the text size are chosen from the fonts installed in the system, the width of the text column (up to the whole window), and the colour of highlighted text (`==…==`) from six or any other, separately for the light and the dark theme. Changes apply at once. Variable fonts get their bold and italic from their axes, and a family without italic is slanted.
+- **Settings**: the Aa button opens the Settings panel where the text font, the code font and the text size are chosen from the fonts installed in the system, the width of the text column (up to the whole window), and the colour of highlighted text (`==…==`) from six or any other, separately for the light and the dark theme. The panel also controls video autoplay. Changes apply at once. Variable fonts get their bold and italic from their axes, and a family without italic is slanted.
 - **Table of contents**: it highlights the current section, and a click jumps to a heading. It stands on the left or on the right: right-click its button or the panel to choose.
 - **Tabs**: links to other `.md` files open in new tabs. Recent files are on the start page, and files can be dropped onto the window. A tab dragged out of the window gets a window of its own, a tab dragged into another window joins it, and dragging along the bar rearranges them.
 - **Live reload**: a file changed on disk is reloaded at the same scroll position.
@@ -214,7 +214,7 @@ src/
     animation.rs       animated GIF, WebP and APNG
     limit.rs           images larger than the GPU takes, made smaller
     toc.rs             table of contents
-    text.rs            Text panel: fonts and text size
+    text.rs            Settings panel: text appearance and video autoplay
     find.rs            find bar
     home.rs            start page with the icon and recent files
     about.rs           About window

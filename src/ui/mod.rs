@@ -140,11 +140,11 @@ Right-click: left or right side",
     })
 }
 
-/// Opens the Text panel (fonts and text size): a large and a small "A",
+/// Opens the Settings panel: a large and a small "A",
 /// drawn in lines like the other icons, with a rounded apex and round ends.
 pub fn text_button(ui: &mut Ui, open: bool) -> Response {
     use egui::{Stroke, pos2};
-    let tip = tr!("Fonts and text size", "Шрифты и размер текста");
+    let tip = tr!("Settings", "Настройки");
     icon_button(ui, "text_icon", open, tip, |painter, c, color, _| {
         let stroke = Stroke::new(1.3, color);
         let at = |x: f32, y: f32| pos2(c.x + x, c.y + y);
