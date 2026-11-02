@@ -73,6 +73,43 @@ fn icon_button(
     response
 }
 
+/// Four corner arrows to expand a video within the application window or
+/// return it to the document.
+pub fn video_expand_button(ui: &mut Ui, expanded: bool) -> Response {
+    let tip = if expanded {
+        tr!(
+            "Return to the document (Esc)",
+            "Вернуться к документу (Esc)"
+        )
+    } else {
+        tr!("View video across the window", "Смотреть видео на всё окно")
+    };
+    icon_button(
+        ui,
+        "video-expand",
+        false,
+        tip,
+        |painter, center, color, _| {
+            let (corner, arm) = if expanded { (2.0, 3.5) } else { (5.5, -3.5) };
+            for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                let c = center + egui::vec2(x * corner, y * corner);
+                round_line(
+                    painter,
+                    rounded(
+                        &[
+                            c + egui::vec2(x * arm, 0.0),
+                            c,
+                            c + egui::vec2(0.0, y * arm),
+                        ],
+                        &[0.0, 0.5, 0.0],
+                    ),
+                    egui::Stroke::new(1.3, color),
+                );
+            }
+        },
+    )
+}
+
 /// Shows or hides the table of contents: an outline of a heading and two
 /// indented subheadings, highlighted while the panel is shown.
 pub fn toc_button(ui: &mut Ui, visible: bool) -> Response {

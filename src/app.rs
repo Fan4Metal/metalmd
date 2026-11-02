@@ -445,6 +445,8 @@ struct Window {
     confirm: ConfirmOpen,
     /// A picture of the document shown on its own over the window.
     lightbox: Option<crate::ui::lightbox::Lightbox>,
+    /// A video fitted over this window, sharing its embed's playback state.
+    video_theater: Option<PathBuf>,
     /// How a detached window is made; `None` for the root.
     builder: Option<ViewportBuilder>,
     /// How far a detached window is from being seen.
@@ -477,6 +479,7 @@ impl Window {
             hwnd: None,
             confirm: ConfirmOpen::default(),
             lightbox: None,
+            video_theater: None,
             appear: match builder {
                 None => Appear::Seen,
                 Some(_) => Appear::Looking(0),
@@ -1520,6 +1523,12 @@ impl App {
                 self.edit(Change::Tick(task));
                 return;
             }
+            ViewAction::ShowVideo(path) => {
+                self.win().lightbox = None;
+                self.win().video_theater = Some(path);
+                ctx.request_repaint();
+                return;
+            }
             ViewAction::ShowPicture(shown) => {
                 // With every picture of the document, to go through them.
                 let mut items = self
@@ -1932,6 +1941,10 @@ impl App {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        // The theater consumes Escape itself; document shortcuts stay inactive.
+        if self.win().video_theater.is_some() {
+            return;
+        }
         let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
         let command_shift = |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
         let plain = |key| KeyboardShortcut::new(Modifiers::NONE, key);
@@ -2945,6 +2958,7 @@ impl App {
         let mut actions = Vec::new();
         let mut home_action = None;
         let mut retry = false;
+        let theater = self.windows[cur].video_theater.clone();
         let Window {
             tabs, active, find, ..
         } = &mut self.windows[cur];
@@ -2957,6 +2971,9 @@ impl App {
                         home::show(ui, &self.settings.recent, &palette, &mut self.start_icon)
                 }
                 Some(tab) => {
+                    if theater.is_some() {
+                        return;
+                    }
                     if let Some(doc) = tab.doc.clone() {
                         let base_dir = tab.path.parent().map(Path::to_path_buf);
                         let mut rc = RenderCtx::new(
@@ -3023,6 +3040,11 @@ impl App {
                 self.windows[cur].lightbox = None;
             }
             self.settings_dirty |= changed;
+        }
+        if let Some(path) = theater
+            && !viewer::show_video_theater(&ctx, &mut self.pictures.video, &path)
+        {
+            self.windows[cur].video_theater = None;
         }
         if let Some(target) = self.windows[cur].confirm.show(&ctx) {
             self.open_target(target);

@@ -62,6 +62,8 @@ pub enum ViewAction {
     Unhighlight,
     /// Show an image or a diagram on its own, over the window.
     ShowPicture(super::lightbox::Shown),
+    /// Show this video fitted over the current application's window.
+    ShowVideo(PathBuf),
 }
 
 /// The text a context menu was opened on: the place under the pointer, and
@@ -2828,8 +2830,23 @@ fn draw_video_at(
     rect: Rect,
     rc: &mut RenderCtx<'_>,
 ) -> Response {
+    let (response, expand) = video_surface(ui, path, frame, rect, &mut rc.pictures.video, false);
+    if expand {
+        rc.actions.push(ViewAction::ShowVideo(path.to_owned()));
+    }
+    response
+}
+
+fn video_surface(
+    ui: &mut Ui,
+    path: &Path,
+    frame: &super::video::VideoFrame,
+    rect: Rect,
+    player: &mut super::video::VideoPlayer,
+    expanded: bool,
+) -> (Response, bool) {
     if ui.is_rect_visible(rect) && !ui.ctx().will_discard() {
-        rc.pictures.video.mark_visible(ui.ctx().viewport_id(), path);
+        player.mark_visible(ui.ctx().viewport_id(), path);
     }
     let response = ui.put(
         rect,
@@ -2843,6 +2860,10 @@ fn draw_video_at(
         rect.max,
     );
     let controls_id = ui.id().with(("video-controls", path));
+    let expand_rect = Rect::from_min_size(
+        pos2(rect.right() - 28.0, rect.top() + 4.0),
+        vec2(24.0, 24.0),
+    );
     let pointer_over = ui
         .ctx()
         .pointer_hover_pos()
@@ -2859,11 +2880,23 @@ fn draw_video_at(
         && !ui
             .ctx()
             .pointer_hover_pos()
-            .is_some_and(|pos| bar.contains(pos))
+            .is_some_and(|pos| bar.contains(pos) || expand_rect.contains(pos))
     {
-        rc.pictures.video.toggle(path);
+        player.toggle(path);
     }
+    let mut expand = false;
     if show_controls {
+        ui.scope_builder(
+            UiBuilder::new()
+                .id_salt((controls_id, "expand"))
+                .max_rect(expand_rect),
+            |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(rect));
+                *ui.visuals_mut() = egui::Visuals::dark();
+                ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+                expand = super::video_expand_button(ui, expanded).clicked();
+            },
+        );
         ui.painter()
             .rect_filled(bar, 6, Color32::from_black_alpha(190));
         ui.scope_builder(
@@ -2873,6 +2906,7 @@ fn draw_video_at(
                 .layout(Layout::left_to_right(egui::Align::Center)),
             |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(bar));
+                *ui.visuals_mut() = egui::Visuals::dark();
                 ui.visuals_mut().override_text_color = Some(Color32::WHITE);
                 let icon = if frame.playing { "⏸" } else { "▶" };
                 if ui
@@ -2884,7 +2918,7 @@ fn draw_video_at(
                     })
                     .clicked()
                 {
-                    rc.pictures.video.toggle(path);
+                    player.toggle(path);
                 }
                 if bar.width() > 130.0 && frame.duration > 0.0 {
                     ui.spacing_mut().slider_width = (bar.width() - 110.0).max(20.0);
@@ -2893,14 +2927,101 @@ fn draw_video_at(
                         .add(egui::Slider::new(&mut position, 0.0..=1.0).show_value(false))
                         .changed()
                     {
-                        rc.pictures.video.seek(path, position);
+                        player.seek(path, position);
                     }
                     ui.label(format!("{:.1}/{:.1}s", frame.position, frame.duration));
                 }
             },
         );
     }
-    response
+    (response, expand)
+}
+
+/// A video fitted to the application's content area. It uses the same decoder
+/// and texture as its embed, so entering and leaving never resets playback.
+pub fn show_video_theater(
+    ctx: &egui::Context,
+    player: &mut super::video::VideoPlayer,
+    path: &Path,
+) -> bool {
+    let screen = ctx.content_rect();
+    let stage = Rect::from_min_max(screen.min + vec2(16.0, 44.0), screen.max - vec2(16.0, 16.0));
+    let mut open =
+        !ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    egui::Area::new(Id::new(("video-theater", ctx.viewport_id())))
+        .order(egui::Order::Middle)
+        .fixed_pos(screen.min)
+        .interactable(true)
+        .show(ctx, |ui| {
+            ui.set_min_size(screen.size());
+            ui.set_clip_rect(screen);
+            *ui.visuals_mut() = egui::Visuals::dark();
+            let backdrop = ui.interact(screen, ui.id().with("backdrop"), Sense::click());
+            ui.painter()
+                .rect_filled(screen, 0.0, Color32::from_black_alpha(245));
+            let mut video_rect = None;
+            match player.get(ctx, path) {
+                Some(super::video::VideoState::Ready(frame)) => {
+                    let scale = (stage.width() / frame.size.x)
+                        .min(stage.height() / frame.size.y)
+                        .max(0.0);
+                    let rect = Rect::from_center_size(stage.center(), frame.size * scale);
+                    video_rect = Some(rect);
+                    let (_, exit) = video_surface(ui, path, &frame, rect, player, true);
+                    open &= !exit;
+                }
+                Some(super::video::VideoState::Failed(error)) => {
+                    ui.put(
+                        stage,
+                        Label::new(egui::RichText::new(error).color(Color32::WHITE)),
+                    );
+                }
+                _ => {
+                    ui.put(stage, egui::Spinner::new());
+                }
+            }
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let mut job = LayoutJob::simple_singleline(
+                name.into_owned(),
+                egui::FontId::proportional(14.0),
+                Color32::WHITE,
+            );
+            job.wrap =
+                egui::text::TextWrapping::truncate_at_width((screen.width() - 100.0).max(0.0));
+            let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+            ui.painter().galley(
+                pos2(
+                    screen.center().x - galley.size().x / 2.0,
+                    screen.top() + 12.0,
+                ),
+                galley,
+                Color32::WHITE,
+            );
+            let close = Rect::from_min_size(
+                pos2(screen.right() - 40.0, screen.top() + 8.0),
+                vec2(32.0, 28.0),
+            );
+            if super::close_cross(
+                &mut ui.new_child(
+                    UiBuilder::new()
+                        .id_salt("video-theater-close")
+                        .max_rect(close),
+                ),
+            ) {
+                open = false;
+            }
+            if backdrop.clicked()
+                && !ctx
+                    .pointer_hover_pos()
+                    .is_some_and(|pos| video_rect.is_some_and(|rect| rect.contains(pos)))
+            {
+                open = false;
+            }
+        });
+    if !open {
+        ctx.request_repaint();
+    }
+    open
 }
 
 /// A local attachment can be elsewhere in the Obsidian vault, just like an image.
@@ -3209,6 +3330,7 @@ mod tests {
         find: FindState,
         base: PathBuf,
         src: String,
+        actions: Vec<ViewAction>,
     }
 
     impl VideoUiTest {
@@ -3227,6 +3349,7 @@ mod tests {
                 find: FindState::default(),
                 base,
                 src,
+                actions: Vec::new(),
             }
         }
 
@@ -3256,6 +3379,7 @@ mod tests {
                         UiBuilder::new()
                     };
                     ui.scope_builder(builder, |ui| draw_video(ui, &self.src, None, None, &mut rc));
+                    self.actions = rc.actions;
                 })
                 .drop_without_applying_deltas();
             if !invisible {
@@ -3264,7 +3388,10 @@ mod tests {
         }
 
         fn click_video(&mut self) {
-            let pos = pos2(20.0, 20.0);
+            self.click_at(pos2(20.0, 20.0));
+        }
+
+        fn click_at(&mut self, pos: egui::Pos2) {
             self.render(false, vec![egui::Event::PointerMoved(pos)]);
             for pressed in [true, false] {
                 self.render(
@@ -3277,6 +3404,28 @@ mod tests {
                     }],
                 );
             }
+        }
+
+        fn render_theater(&mut self, path: &Path, events: Vec<egui::Event>) -> bool {
+            self.pictures.video.begin_view(egui::ViewportId::ROOT);
+            let mut open = true;
+            self.ctx
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(1200.0, 1200.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        open = show_video_theater(ui.ctx(), &mut self.pictures.video, path);
+                    },
+                )
+                .drop_without_applying_deltas();
+            self.pictures.video.end_view();
+            open
         }
 
         fn render_gallery(&mut self, images: &[ImageRef], masonry: bool, hover: bool) -> f32 {
@@ -3349,6 +3498,78 @@ mod tests {
             };
             assert_eq!(frame.playing, playing);
             assert_eq!(frame.position, 0.037);
+        }
+    }
+
+    #[test]
+    fn expand_video_button_requests_theater_without_pausing() {
+        use super::super::video::{VideoPlayer, VideoState};
+        let mut ui = VideoUiTest::new(std::env::temp_dir(), "clip.mp4".into());
+        let path = ui.base.join(&ui.src);
+        ui.pictures.video = VideoPlayer::test_playing(&ui.ctx, &path, 0.037);
+        ui.render(false, vec![]);
+        ui.click_at(pos2(48.0, 16.0));
+        assert_eq!(ui.actions, [ViewAction::ShowVideo(path.clone())]);
+        assert!(matches!(ui.pictures.video.get(&ui.ctx, &path),
+            Some(VideoState::Ready(frame)) if frame.playing && frame.position == 0.037));
+    }
+
+    #[test]
+    fn theater_keeps_position_texture_and_manual_pause_when_closed_with_escape() {
+        use super::super::video::{VideoPlayer, VideoState};
+        for paused in [false, true] {
+            let mut ui = VideoUiTest::new(std::env::temp_dir(), "clip.mp4".into());
+            let path = ui.base.join(&ui.src);
+            ui.pictures.video = VideoPlayer::test_playing(&ui.ctx, &path, 0.037);
+            if paused {
+                ui.pictures.video.toggle(&path);
+            }
+            let Some(VideoState::Ready(before)) = ui.pictures.video.get(&ui.ctx, &path) else {
+                panic!("a prepared video");
+            };
+            assert!(ui.render_theater(&path, vec![]));
+            assert!(!ui.render_theater(
+                &path,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: Some(egui::Key::Escape),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]
+            ));
+            ui.render(false, vec![]);
+            let Some(VideoState::Ready(after)) = ui.pictures.video.get(&ui.ctx, &path) else {
+                panic!("a prepared video");
+            };
+            assert_eq!(after.texture.id(), before.texture.id());
+            assert_eq!(after.position, before.position);
+            assert_eq!(after.playing, before.playing);
+        }
+    }
+
+    #[test]
+    fn theater_closes_from_the_corner_button_cross_and_backdrop() {
+        use super::super::video::VideoPlayer;
+        for pos in [pos2(1154.0, 60.0), pos2(1172.0, 20.0), pos2(15.0, 500.0)] {
+            let mut ui = VideoUiTest::new(std::env::temp_dir(), "clip.mp4".into());
+            let path = ui.base.join(&ui.src);
+            ui.pictures.video = VideoPlayer::test_playing(&ui.ctx, &path, 0.037);
+            ui.render_theater(&path, vec![]);
+            ui.render_theater(&path, vec![egui::Event::PointerMoved(pos)]);
+            let mut open = true;
+            for pressed in [true, false] {
+                open = ui.render_theater(
+                    &path,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            assert!(!open, "theater must close at {pos:?}");
         }
     }
 
@@ -3581,6 +3802,16 @@ mod tests {
             .iter()
             .find_map(|block| match block {
                 Block::Video { src, .. } => Some(src),
+                Block::Gallery { images, .. } => images
+                    .iter()
+                    .find(|image| is_video_file(&image.src))
+                    .map(|image| &image.src),
+                Block::Paragraph { inlines, .. } => {
+                    inlines.iter().find_map(|inline| match inline {
+                        Inline::Image(image) if is_video_file(&image.src) => Some(&image.src),
+                        _ => None,
+                    })
+                }
                 _ => None,
             })
             .expect("a video block in the document");
@@ -3609,13 +3840,21 @@ mod tests {
         assert!(matches!(ui.pictures.video.get(&ui.ctx, &path),
             Some(VideoState::Ready(frame)) if frame.playing));
         let mut positions = vec![preview.position];
+        let mut visited_theater = false;
         loop {
             // The renderer also measures blocks invisibly. Neither rendering
             // pass may generate a Seek/Pause without user input.
-            ui.render(false, vec![]);
-            ui.render(true, vec![]);
+            let position = *positions.last().unwrap();
+            if (0.5..1.5).contains(&position) {
+                visited_theater = true;
+                assert!(ui.render_theater(&path, vec![]));
+            } else {
+                ui.render(false, vec![]);
+                ui.render(true, vec![]);
+            }
             match ui.pictures.video.get(&ui.ctx, &path) {
                 Some(VideoState::Ready(frame)) => {
+                    assert_eq!(frame.texture.id(), preview.texture.id());
                     if frame.position < *positions.last().unwrap() && positions.len() > 2 {
                         println!("autoplay looped: {} frames observed", positions.len());
                         assert!(*positions.last().unwrap() >= preview.duration - 0.2);
@@ -3632,6 +3871,10 @@ mod tests {
             assert!(Instant::now() < deadline, "video playback timed out");
             std::thread::sleep(Duration::from_millis(10));
         }
+        assert!(
+            visited_theater,
+            "exercise both embedded and window-fitted playback"
+        );
     }
 
     #[test]

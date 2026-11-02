@@ -23,7 +23,7 @@ MetalMD is a Markdown viewer that shows a document about 0.2 s after you double-
 
 ## Features
 
-- **Videos as animated pictures**: local video embeds autoplay silently on a loop, including mixed image/video `[!gallery]` and `[!gallery-masonry]` callouts. Several visible clips can play together. Controls overlay the video only on hover; clips pause outside the viewport or in inactive tabs and resume on return, while a manual pause is kept. Video format support comes from Windows Media Foundation.
+- **Videos as animated pictures**: local video embeds autoplay silently on a loop, including mixed image/video `[!gallery]` and `[!gallery-masonry]` callouts. Several visible clips can play together. Controls overlay the video only on hover; clips pause outside the viewport or in inactive tabs and resume on return, while a manual pause is kept. A corner button opens the video across the application window, keeping its playback position and aspect ratio; Esc, the close button or a click on the backdrop returns to the document. Video format support comes from Windows Media Foundation.
 
 - **Fast**: the document appears about 0.2 s after start-up, for a 27 KB note as for a 5 MB log (see [Start-up speed](#start-up-speed)).
 - **GitHub-flavoured Markdown**: tables, task lists, strikethrough, autolinks, footnotes, `> [!NOTE]` alerts and front matter, through [comrak](https://github.com/kivikakk/comrak).
