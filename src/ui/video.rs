@@ -217,8 +217,11 @@ impl VideoPlayer {
             );
         }
 
-        // Drain messages from all workers.
-        while let Ok((msg_path, msg)) = self.receiver.try_recv() {
+        // Take a snapshot before acknowledging frames. Otherwise a worker
+        // catching up can refill this queue during texture uploads and keep
+        // the UI here instead of letting it paint the frames it just received.
+        let messages: Vec<_> = self.receiver.try_iter().collect();
+        for (msg_path, msg) in messages {
             if let Some(video) = videos.get_mut(&msg_path) {
                 match msg {
                     WorkerMsg::Info {
@@ -435,15 +438,31 @@ fn worker_inner(
     loop {
         let cmd = if playing && !awaiting_frame {
             if pending.is_none() {
-                pending = decoder.read_frame()?;
+                let playhead = clock.1
+                    + Instant::now()
+                        .saturating_duration_since(clock.0)
+                        .as_secs_f64();
+                pending = decoder.read_frame_after(playhead)?;
                 if pending.is_none() {
                     // Keep the final frame on screen for its remaining time,
-                    // then continue from the first frame without a paused UI.
-                    let duration = decoder.duration_s.max(position + 1.0 / 30.0);
+                    // then loop on the video stream's own end, not a longer
+                    // audio track or an assumed 30 fps final frame.
+                    let duration = decoder.frame_end_s.max(decoder.frame_duration_s);
                     clock.0 += Duration::from_secs_f64((duration - clock.1).max(0.0));
                     clock.1 = 0.0;
+                    // A hidden or busy UI can miss whole iterations. Skip
+                    // them without resetting the clock or replaying a backlog.
+                    let late = Instant::now()
+                        .saturating_duration_since(clock.0)
+                        .as_secs_f64();
+                    clock.0 += Duration::from_secs_f64((late / duration).floor() * duration);
+                    let playhead = late % duration;
                     decoder.seek(0.0)?;
-                    pending = Some(decoder.read_frame()?.ok_or("video has no frames")?);
+                    pending = Some(
+                        decoder
+                            .read_frame_after(playhead)?
+                            .ok_or("video has no frames")?,
+                    );
                 }
             }
             // Pace decoding by the file's timestamps. Only one future frame is
@@ -511,6 +530,8 @@ struct Decoder {
     height: u32,
     stride: i32,
     duration_s: f64,
+    frame_duration_s: f64,
+    frame_end_s: f64,
 }
 
 #[cfg(windows)]
@@ -559,6 +580,8 @@ impl Decoder {
                 height: 0,
                 stride: 0,
                 duration_s: 0.0,
+                frame_duration_s: 1.0 / 30.0,
+                frame_end_s: 0.0,
             };
             decoder.update_format()?;
             if let Ok(mut variant) = decoder
@@ -595,6 +618,13 @@ impl Decoder {
                 .map_err(|e| format!("get frame size: {e}"))?;
             self.width = (size >> 32) as u32;
             self.height = size as u32;
+            if let Ok(rate) = current.GetUINT64(&MF_MT_FRAME_RATE) {
+                let numerator = (rate >> 32) as u32;
+                let denominator = rate as u32;
+                if numerator > 0 && denominator > 0 {
+                    self.frame_duration_s = denominator as f64 / numerator as f64;
+                }
+            }
             self.stride = match current.GetUINT32(&MF_MT_DEFAULT_STRIDE) {
                 Ok(stride) => stride as i32,
                 Err(_) => MFGetStrideForBitmapInfoHeader(MFVideoFormat_RGB32.data1, self.width)
@@ -604,7 +634,7 @@ impl Decoder {
         }
     }
 
-    fn seek(&self, to: f64) -> Result<(), String> {
+    fn seek(&mut self, to: f64) -> Result<(), String> {
         unsafe {
             let mut var = PROPVARIANT::default();
             let anon = std::ptr::addr_of_mut!(var.Anonymous.Anonymous);
@@ -612,11 +642,19 @@ impl Decoder {
             (&mut *anon).Anonymous.hVal = (to * 10_000_000.0) as i64;
             self.reader
                 .SetCurrentPosition(&GUID::zeroed(), &var)
-                .map_err(|e| format!("seek: {e}"))
+                .map_err(|e| format!("seek: {e}"))?;
+            self.frame_end_s = 0.0;
+            Ok(())
         }
     }
 
     fn read_frame(&mut self) -> Result<Option<Frame>, String> {
+        self.read_frame_after(f64::NEG_INFINITY)
+    }
+
+    /// Drop expired samples before allocating and converting their pixels.
+    /// Keep the frame covering the playhead, including variable-rate samples.
+    fn read_frame_after(&mut self, playhead: f64) -> Result<Option<Frame>, String> {
         unsafe {
             loop {
                 let mut flags = 0u32;
@@ -640,6 +678,18 @@ impl Decoder {
                     self.update_format()?;
                 }
                 if let Some(sample) = sample {
+                    let pts = timestamp as f64 / 10_000_000.0;
+                    let duration = sample
+                        .GetSampleDuration()
+                        .ok()
+                        .filter(|duration| *duration > 0)
+                        .map_or(self.frame_duration_s, |duration| {
+                            duration as f64 / 10_000_000.0
+                        });
+                    self.frame_end_s = pts + duration;
+                    if self.frame_end_s <= playhead {
+                        continue;
+                    }
                     let buffer = sample
                         .ConvertToContiguousBuffer()
                         .map_err(|e| format!("get buffer: {e}"))?;
@@ -662,10 +712,7 @@ impl Decoder {
                     let unlocked = buffer.Unlock();
                     let image = image?;
                     unlocked.map_err(|e| format!("unlock buffer: {e}"))?;
-                    return Ok(Some(Frame {
-                        image,
-                        pts: timestamp as f64 / 10_000_000.0,
-                    }));
+                    return Ok(Some(Frame { image, pts }));
                 }
                 if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
                     return Ok(None);
@@ -693,20 +740,17 @@ fn rgb32_image(data: &[u8], width: u32, height: u32, stride: i32) -> Result<Colo
     let size = row_bytes
         .checked_mul(height)
         .ok_or("video frame is too large")?;
-    let mut rgba = Vec::with_capacity(size);
+    let mut pixels = Vec::with_capacity(size / 4);
     for y in 0..height {
         let row = if stride < 0 { height - 1 - y } else { y };
         for pixel in data[row * pitch..row * pitch + row_bytes]
             .as_chunks::<4>()
             .0
         {
-            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+            pixels.push(egui::Color32::from_rgb(pixel[2], pixel[1], pixel[0]));
         }
     }
-    Ok(ColorImage::from_rgba_unmultiplied(
-        [width as usize, height],
-        &rgba,
-    ))
+    Ok(ColorImage::new([width as usize, height], pixels))
 }
 
 #[cfg(test)]
@@ -884,6 +928,51 @@ mod tests {
         assert_eq!(player.videos.lock().unwrap()[&b].state, PlayState::Playing);
         player.retain_views(|viewport| viewport == root);
         assert_eq!(player.videos.lock().unwrap()[&b].state, PlayState::Paused);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn slow_video_consumer_catches_up_to_wall_clock_and_loops() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video-h264.mp4");
+        let (commands, receiver) = channel();
+        let (sender, messages) = channel();
+        let thread = std::thread::spawn(move || {
+            worker(path, receiver, sender, &|| {}).expect("native video worker")
+        });
+        let receive_frame = || loop {
+            match messages.recv_timeout(Duration::from_secs(10)).unwrap().1 {
+                WorkerMsg::Frame(frame) => break frame,
+                WorkerMsg::Info { .. } => {}
+                _ => panic!("unexpected worker response"),
+            }
+        };
+        let preview = receive_frame();
+        assert!(preview.pts.abs() < 0.01);
+        commands.send(WorkerCmd::FrameShown).unwrap();
+        let started = Instant::now();
+        commands.send(WorkerCmd::Play).unwrap();
+        let first = receive_frame();
+        assert!((first.pts - 0.1).abs() < 0.01);
+
+        // A slow UI must skip stale frames rather than play the backlog.
+        std::thread::sleep(Duration::from_millis(650));
+        commands.send(WorkerCmd::FrameShown).unwrap();
+        let caught_up = receive_frame();
+        let lag = started.elapsed().as_secs_f64() - caught_up.pts;
+        assert!(lag < 0.2, "playback fell behind by {lag:.3}s");
+
+        // Several missed loops must not cause a burst of old iterations.
+        std::thread::sleep(Duration::from_millis(4300));
+        commands.send(WorkerCmd::FrameShown).unwrap();
+        let looped = receive_frame();
+        let expected = started.elapsed().as_secs_f64() % 2.0;
+        assert!(
+            (expected - looped.pts).abs() < 0.2,
+            "loop is at {:.3}s instead of {expected:.3}s",
+            looped.pts
+        );
+        drop(commands);
+        thread.join().unwrap();
     }
 
     #[cfg(windows)]
