@@ -86,6 +86,9 @@ struct Video {
     position: f64,
     /// Sends commands to the worker.
     worker_tx: Sender<WorkerCmd>,
+    /// A private queue: closing this video also releases its queued frames.
+    worker_rx: Receiver<(PathBuf, WorkerMsg)>,
+    documents: HashSet<PathBuf>,
     error: Option<String>,
 }
 
@@ -119,8 +122,7 @@ type Videos = Arc<Mutex<HashMap<PathBuf, Video>>>;
 /// UI thread.
 pub struct VideoPlayer {
     videos: Videos,
-    receiver: Receiver<(PathBuf, WorkerMsg)>,
-    sender: Sender<(PathBuf, WorkerMsg)>,
+    documents: HashMap<egui::ViewportId, PathBuf>,
     /// Clips painted by each viewport, excluding invisible measuring passes.
     visible: HashMap<egui::ViewportId, HashSet<PathBuf>>,
     autoplay: bool,
@@ -147,6 +149,8 @@ impl VideoPlayer {
                 )),
                 position,
                 worker_tx,
+                worker_rx: channel().1,
+                documents: HashSet::new(),
                 error: None,
             },
         );
@@ -159,11 +163,9 @@ impl VideoPlayer {
     }
 
     pub fn new(repaint: impl Fn() + Send + Sync + 'static) -> VideoPlayer {
-        let (sender, receiver) = channel();
         VideoPlayer {
             videos: Arc::new(Mutex::new(HashMap::new())),
-            receiver,
-            sender,
+            documents: HashMap::new(),
             visible: HashMap::new(),
             autoplay: true,
             repaint: Arc::new(repaint),
@@ -175,7 +177,7 @@ impl VideoPlayer {
     pub fn get(&mut self, ctx: &Context, path: &Path) -> Option<VideoState> {
         let mut videos = self.videos.lock().expect("video lock");
         if !videos.contains_key(path) {
-            let sender = self.sender.clone();
+            let (sender, messages) = channel();
             let worker_path = path.to_owned();
             let repaint = self.repaint.clone();
             let (worker_tx, worker_rx) = channel();
@@ -212,6 +214,8 @@ impl VideoPlayer {
                     texture: None,
                     position: 0.0,
                     worker_tx,
+                    worker_rx: messages,
+                    documents: HashSet::new(),
                     error: None,
                 },
             );
@@ -220,9 +224,9 @@ impl VideoPlayer {
         // Take a snapshot before acknowledging frames. Otherwise a worker
         // catching up can refill this queue during texture uploads and keep
         // the UI here instead of letting it paint the frames it just received.
-        let messages: Vec<_> = self.receiver.try_iter().collect();
-        for (msg_path, msg) in messages {
-            if let Some(video) = videos.get_mut(&msg_path) {
+        for (msg_path, video) in videos.iter_mut() {
+            let messages: Vec<_> = video.worker_rx.try_iter().collect();
+            for (_, msg) in messages {
                 match msg {
                     WorkerMsg::Info {
                         width,
@@ -259,6 +263,9 @@ impl VideoPlayer {
         }
 
         let video = videos.get_mut(path)?;
+        if let Some(document) = self.documents.get(&ctx.viewport_id()) {
+            video.documents.insert(document.clone());
+        }
         if let Some(error) = &video.error {
             return Some(VideoState::Failed(error.clone()));
         }
@@ -300,6 +307,34 @@ impl VideoPlayer {
         }
     }
 
+    /// Associate requests, including off-screen measurements, with the
+    /// document that owns them. Several tabs/windows may share a decoder.
+    pub fn set_document(&mut self, viewport: egui::ViewportId, path: Option<&Path>) {
+        if let Some(path) = path {
+            self.documents.insert(viewport, path.to_owned());
+        } else {
+            self.documents.remove(&viewport);
+        }
+    }
+
+    /// Called after the last tab showing this document closes. Dropping both
+    /// channels releases queued images and wakes its workers so COM readers
+    /// and file handles are released without joining a thread on the UI.
+    pub fn forget_document(&mut self, path: &Path) {
+        self.documents
+            .retain(|_, document| !crate::settings::same_path(document, path));
+        let mut videos = self.videos.lock().expect("video lock");
+        videos.retain(|_, video| {
+            video
+                .documents
+                .retain(|document| !crate::settings::same_path(document, path));
+            !video.documents.is_empty()
+        });
+        for visible in self.visible.values_mut() {
+            visible.retain(|path| videos.contains_key(path));
+        }
+    }
+
     /// Resume a visible clip according to autoplay and the reader's intent.
     pub fn mark_visible(&mut self, viewport: egui::ViewportId, path: &Path) {
         self.visible
@@ -328,6 +363,7 @@ impl VideoPlayer {
 
     pub fn retain_views(&mut self, mut is_open: impl FnMut(egui::ViewportId) -> bool) {
         self.visible.retain(|viewport, _| is_open(*viewport));
+        self.documents.retain(|viewport, _| is_open(*viewport));
         self.end_view();
     }
 
@@ -758,6 +794,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn closing_documents_releases_private_queues_and_keeps_shared_videos() {
+        let ctx = Context::default();
+        let path = PathBuf::from("shared.mp4");
+        let first = PathBuf::from("first.md");
+        let second = PathBuf::from("second.md");
+        let mut player = VideoPlayer::test_playing(&ctx, &path, 0.5);
+        let (commands, worker_commands) = channel();
+        let (messages, frames) = channel();
+        {
+            let mut videos = player.videos.lock().unwrap();
+            let video = videos.get_mut(&path).unwrap();
+            video.worker_tx = commands;
+            video.worker_rx = frames;
+        }
+        for document in [&first, &second] {
+            player.set_document(egui::ViewportId::ROOT, Some(document));
+            assert!(matches!(
+                player.get(&ctx, &path),
+                Some(VideoState::Ready(_))
+            ));
+        }
+        player.forget_document(&first);
+        assert!(player.videos.lock().unwrap().contains_key(&path));
+        // A queued frame must be freed on close even if no video is drawn again.
+        messages
+            .send((
+                path.clone(),
+                WorkerMsg::Frame(Frame {
+                    image: ColorImage::new([2, 2], vec![egui::Color32::RED; 4]),
+                    pts: 0.6,
+                }),
+            ))
+            .unwrap();
+        player.forget_document(&second);
+        assert!(player.videos.lock().unwrap().is_empty());
+        assert!(player.visible.values().all(HashSet::is_empty));
+        assert!(matches!(
+            worker_commands.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
+        assert!(messages.send((path, WorkerMsg::Paused)).is_err());
+    }
+
+    #[test]
     fn rgb32_handles_padding_and_bottom_up_rows() {
         // Two pixels per row plus four padding bytes. Alpha is ignored.
         let data = [
@@ -809,6 +889,8 @@ mod tests {
                 texture: None,
                 position: 0.0,
                 worker_tx,
+                worker_rx: channel().1,
+                documents: HashSet::new(),
                 error: None,
             },
         );
@@ -884,6 +966,8 @@ mod tests {
                     texture: None,
                     position: 0.0,
                     worker_tx,
+                    worker_rx: channel().1,
+                    documents: HashSet::new(),
                     error: None,
                 },
             );

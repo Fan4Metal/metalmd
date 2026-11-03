@@ -1043,6 +1043,12 @@ impl App {
             watcher.unwatch(&tab.path);
         }
         self.forget_images(&tab);
+        if !self
+            .all_tabs()
+            .any(|other| same_path(&other.path, &tab.path))
+        {
+            self.pictures.video.forget_document(&tab.path);
+        }
     }
 
     /// Frees the images of a closed tab that no other tab shows: egui keeps
@@ -2924,6 +2930,10 @@ impl App {
         self.jump_to_find_match();
 
         let wid = self.windows[cur].id;
+        self.pictures.video.set_document(
+            ctx.viewport_id(),
+            self.windows[cur].active_tab().map(|tab| tab.path.as_path()),
+        );
         let active_doc = self.windows[cur].active_tab().and_then(|t| t.doc.clone());
         // In a narrow window the contents take at most a third of it, and
         // none below `TOC_MIN_WINDOW`: the text needs the room more. The
