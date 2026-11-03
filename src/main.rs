@@ -183,8 +183,8 @@ fn main() -> eframe::Result {
     )
 }
 
-/// The version shown in the UI.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version shown in the UI; development builds include the Git revision.
+pub const VERSION: &str = env!("METALMD_VERSION");
 
 /// The icon of every window, from the embedded 64-pixel rendering.
 pub fn window_icon() -> Arc<egui::IconData> {
