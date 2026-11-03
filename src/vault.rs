@@ -264,6 +264,32 @@ pub fn locate_now(folder: &Path, target: &str) -> Option<PathBuf> {
     found
 }
 
+/// Markdown documents for quick open. Called on a worker only, after the
+/// dialog is opened; reuse a recent listing and serialize with other scans.
+pub fn note_paths(folder: &Path) -> Vec<PathBuf> {
+    let Some(root) = root_of(folder) else {
+        return Vec::new();
+    };
+    let _listing = LISTING.lock().unwrap_or_else(|e| e.into_inner());
+    let cached = match state().vaults.get(&root) {
+        Some(Slot::Ready(index)) if index.made.elapsed() < STALE => Some(index.clone()),
+        _ => None,
+    };
+    let index = cached.unwrap_or_else(|| {
+        let index = Arc::new(Index::build(&root));
+        let mut state = state();
+        state.vaults.insert(root, Slot::Ready(index.clone()));
+        state.found.clear();
+        index
+    });
+    index
+        .paths
+        .iter()
+        .filter(|path| crate::markdown::preprocess::is_markdown_path(&path.to_string_lossy()))
+        .map(|path| index.root.join(path))
+        .collect()
+}
+
 /// Forgets what was found and the listings, so that the next miss looks
 /// again (a document reloaded by hand: files may have moved).
 pub fn forget() {
@@ -385,6 +411,33 @@ mod tests {
         assert!(!link_missing(&folder, "https://example.com/x.md", &ctx));
         assert!(!link_missing(&folder, "#top", &ctx));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn quick_open_lists_only_documents_outside_ignored_folders() {
+        let (root, _) = vault(&[
+            "Notes/Мир.md",
+            "Notes/Other.MARKDOWN",
+            "Notes/plain.txt",
+            "Images/picture.png",
+            ".git/hidden.md",
+            "node_modules/package/README.md",
+        ]);
+        let mut notes: Vec<_> = note_paths(&root.join("Notes"))
+            .into_iter()
+            .map(|path| {
+                path.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        notes.sort();
+        assert_eq!(
+            notes,
+            ["Notes/Other.MARKDOWN", "Notes/plain.txt", "Notes/Мир.md"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

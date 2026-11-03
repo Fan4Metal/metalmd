@@ -13,6 +13,7 @@ pub mod lightbox;
 pub mod limit;
 pub mod math;
 pub mod menu;
+pub mod quick_open;
 pub mod render_cache;
 pub mod selection;
 pub mod svg;

@@ -438,6 +438,7 @@ struct Window {
     active: usize,
     find: FindState,
     find_jump: bool,
+    quick_open: crate::ui::quick_open::QuickOpen,
     /// The caption shown.
     title: String,
     hwnd: Option<isize>,
@@ -475,6 +476,7 @@ impl Window {
             active: 0,
             find: FindState::default(),
             find_jump: false,
+            quick_open: Default::default(),
             title: String::new(),
             hwnd: None,
             confirm: ConfirmOpen::default(),
@@ -1984,6 +1986,12 @@ impl App {
         if self.about_here() || self.win().confirm.is_open() {
             return;
         }
+        if consume(command(Key::K)) {
+            self.start_quick_open(ctx);
+        }
+        if self.win().quick_open.open {
+            return;
+        }
         if self.text_panel.open
             && self.text_panel.window == self.win().id
             && consume(plain(Key::Escape))
@@ -2138,10 +2146,28 @@ impl App {
         });
     }
 
+    fn start_quick_open(&mut self, ctx: &egui::Context) {
+        let tabs = self
+            .all_tabs()
+            .map(|tab| tab.path.clone())
+            .collect::<Vec<_>>();
+        let folder = self.windows[self.current]
+            .active_tab()
+            .and_then(|tab| tab.path.parent())
+            .map(Path::to_owned);
+        self.windows[self.current].quick_open.start(
+            tabs,
+            &self.settings.recent,
+            folder.as_deref(),
+            ctx,
+        );
+    }
+
     fn tab_bar(&mut self, ui: &mut Ui, palette: &Palette) {
         let mut activate = None;
         let mut close = None;
         let mut open_dialog = false;
+        let mut quick_open = false;
         let mut print_choice = None;
         let mut menu_action = None;
         let cur = self.current;
@@ -2157,9 +2183,19 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     // File actions first, where opening one adds its tab.
-                    if crate::ui::open_button(ui).clicked() {
+                    let open = crate::ui::open_button(ui);
+                    if open.clicked() {
                         open_dialog = true;
                     }
+                    crate::ui::menu::context_menu(&open, |ui| {
+                        if ui
+                            .button(tr!("Quick open… (Ctrl+K)", "Быстрый переход… (Ctrl+K)"))
+                            .clicked()
+                        {
+                            quick_open = true;
+                            ui.close();
+                        }
+                    });
                     let printable = self.windows[cur]
                         .active_tab()
                         .is_some_and(|t| t.doc.is_some());
@@ -2383,6 +2419,9 @@ impl App {
         }
         if open_dialog {
             self.open_dialog();
+        }
+        if quick_open {
+            self.start_quick_open(ui.ctx());
         }
         if let Some(choice) = print_choice {
             let ctx = ui.ctx().clone();
@@ -3069,6 +3108,9 @@ impl App {
         }
         if let Some(target) = self.windows[cur].confirm.show(&ctx) {
             self.open_target(target);
+        }
+        if let Some(path) = self.windows[cur].quick_open.show(&ctx) {
+            self.open_paths(vec![path]);
         }
         for action in actions {
             self.handle_action(&ctx, action);
