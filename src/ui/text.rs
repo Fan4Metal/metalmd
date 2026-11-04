@@ -1,4 +1,5 @@
-//! The Settings panel: fonts, text appearance and video autoplay.
+//! The Settings panel: fonts, text appearance, video autoplay and the
+//! gallery row height.
 //! Changes apply at once, so
 //! the document behind the panel shows them.
 
@@ -6,7 +7,7 @@ use crate::fonts::Family;
 use crate::settings::Settings;
 use crate::style::{
     BODY_SIZES, CONTENT_WIDTHS, DEFAULT_BODY_SIZE, DEFAULT_CONTENT_WIDTH, DEFAULT_FAMILIES,
-    mark_presets,
+    DEFAULT_GALLERY_ROW, GALLERY_ROWS, mark_presets,
 };
 use egui::{
     Align2, Color32, ComboBox, Id, PopupCloseBehavior, Response, Sense, Stroke, StrokeKind,
@@ -32,6 +33,8 @@ pub enum TextChange {
         color: Option<Color32>,
     },
     VideoAutoplay(bool),
+    /// The height `[!gallery]` rows aim at, in points.
+    GalleryRow(f32),
     /// Back to the defaults for every option in this panel.
     Reset,
 }
@@ -213,6 +216,34 @@ impl TextPanel {
                             change = Some(TextChange::VideoAutoplay(true));
                         }
                         ui.end_row();
+
+                        ui.label(tr!("Gallery row height", "Высота ряда галереи"))
+                            .on_hover_text(tr!(
+                                "The height rows of a [!gallery] callout aim at",
+                                "Высота, к которой стремятся ряды выноски [!gallery]"
+                            ));
+                        let mut row = settings.gallery_row;
+                        let slider = egui::Slider::new(&mut row, GALLERY_ROWS)
+                            .step_by(10.0)
+                            .fixed_decimals(0)
+                            .suffix(tr!(" pt", " пт"));
+                        if ui.add(slider).changed() {
+                            change = Some(TextChange::GalleryRow(row));
+                        }
+                        if reset_button(
+                            ui,
+                            "reset-gallery-row",
+                            settings.gallery_row != DEFAULT_GALLERY_ROW,
+                            &tr!(
+                                format!("Default ({DEFAULT_GALLERY_ROW:.0} pt)"),
+                                format!("По умолчанию ({DEFAULT_GALLERY_ROW:.0} пт)")
+                            ),
+                        )
+                        .clicked()
+                        {
+                            change = Some(TextChange::GalleryRow(DEFAULT_GALLERY_ROW));
+                        }
+                        ui.end_row();
                     });
                 ui.add_space(4.0);
                 let default = settings.font.is_none()
@@ -221,7 +252,8 @@ impl TextPanel {
                     && settings.text_width == DEFAULT_CONTENT_WIDTH
                     && settings.mark_color.is_none()
                     && settings.mark_color_dark.is_none()
-                    && settings.video_autoplay;
+                    && settings.video_autoplay
+                    && settings.gallery_row == DEFAULT_GALLERY_ROW;
                 if ui
                     .add_enabled(
                         !default,

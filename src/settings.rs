@@ -175,6 +175,8 @@ pub struct Settings {
     pub mark_color_dark: Option<String>,
     /// Start visible videos automatically, unless manually paused.
     pub video_autoplay: bool,
+    /// The height `[!gallery]` rows aim at, in points (`style::gallery_row`).
+    pub gallery_row: f32,
     /// Check for a newer release at start-up, at most once a day; off
     /// until turned on in About.
     pub check_updates: bool,
@@ -216,6 +218,7 @@ impl Default for Settings {
             mark_color: None,
             mark_color_dark: None,
             video_autoplay: true,
+            gallery_row: crate::style::DEFAULT_GALLERY_ROW,
             check_updates: false,
             last_update_check: 0,
             session: Vec::new(),
@@ -484,6 +487,7 @@ mod tests {
             zoom: 1.25,
             toc_side: TocSide::Right,
             video_autoplay: false,
+            gallery_row: 180.0,
             ..Settings::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
@@ -493,6 +497,7 @@ mod tests {
         assert_eq!(partial.zoom, 1.0);
         assert_eq!(partial.toc_side, TocSide::Left);
         assert!(partial.video_autoplay);
+        assert_eq!(partial.gallery_row, crate::style::DEFAULT_GALLERY_ROW);
     }
 
     #[test]

@@ -339,9 +339,17 @@ impl<'d> Writer<'d> {
             Block::Rule => {
                 let _ = writeln!(self.out, "<hr{id_attr}>");
             }
-            Block::Gallery { images, .. } => {
+            Block::Gallery {
+                masonry,
+                images,
+                breaks,
+            } => {
                 let _ = writeln!(self.out, "<div class=\"gallery\"{id_attr}>");
-                for image in images {
+                for (index, image) in images.iter().enumerate() {
+                    // A `***` line: the pictures after it start a new row.
+                    if !masonry && index > 0 && breaks.contains(&index) {
+                        self.out.push_str("<div class=\"gallery-break\"></div>\n");
+                    }
                     self.image(image);
                 }
                 self.out.push_str(
@@ -818,6 +826,7 @@ img[width] { height: auto; }
 .alert { padding: .5em 1em; border-left: .25em solid var(--alert); }
 .alert-title { margin: 0 0 .5em; font-weight: 600; color: var(--alert); }
 .gallery { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 16px; }
+.gallery-break { flex-basis: 100%; height: 0; }
 .gallery img { height: 12em; width: auto; max-width: 100%; object-fit: cover; border-radius: 6px; }
 .embed { padding: 0 1em; border-left: .25em solid $BORDER; }
 .task-mark { display: inline-block; width: 1em; height: 1em; line-height: 1em; margin-right: .3em; text-align: center; font-size: .85em; border: 1px solid $MUTED; border-radius: 3px; color: $MUTED; }
@@ -901,6 +910,19 @@ mod tests {
         ] {
             assert!(page.contains(part), "{part} in {page}");
         }
+    }
+
+    #[test]
+    fn a_gallery_row_separator_breaks_the_printed_row() {
+        let page = html("> [!gallery]\n> ![](a.png)\n> ***\n> ![](b.png)\n> ***\n");
+        let gallery = &page[page.find("<div class=\"gallery\"").unwrap()..];
+        let (a, b) = (
+            gallery.find("a.png").unwrap(),
+            gallery.find("b.png").unwrap(),
+        );
+        let breaks: Vec<_> = gallery.match_indices("gallery-break\"").collect();
+        assert_eq!(breaks.len(), 1, "none after the last picture");
+        assert!(a < breaks[0].0 && breaks[0].0 < b);
     }
 
     #[test]

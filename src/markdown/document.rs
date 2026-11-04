@@ -232,6 +232,11 @@ pub enum Block {
     Gallery {
         masonry: bool,
         images: Vec<ImageRef>,
+        /// Where a `***` line closes a group of `images`: the index of the
+        /// first picture after it (`images.len()` for one after the last),
+        /// increasing, never 0. Each group is packed on its own and ends
+        /// with a full row; masonry ignores them, as the plugin does.
+        breaks: Vec<usize>,
     },
     /// An Obsidian note embed, `![[Note]]` or `![[Note#Heading]]`, alone
     /// in its paragraph: the note's blocks in a frame of their own.
@@ -982,9 +987,13 @@ impl Builder {
                         "gallery" => Some(false),
                         "gallery-masonry" => Some(true),
                         _ => None,
-                    } && let Some(images) = gallery_images(&blocks)
+                    } && let Some((images, breaks)) = gallery_images(&blocks)
                     {
-                        out.push(Block::Gallery { masonry, images });
+                        out.push(Block::Gallery {
+                            masonry,
+                            images,
+                            breaks,
+                        });
                         return;
                     }
                     let fold = fold.map(|open| self.fold(open));
@@ -2069,10 +2078,20 @@ fn find_tag(text: &str, before: Option<char>) -> Option<Range<usize>> {
 }
 
 /// The pictures of a callout's blocks if they are paragraphs of nothing
-/// else (white space and line breaks aside), else `None`.
-fn gallery_images(blocks: &[Block]) -> Option<Vec<ImageRef>> {
+/// else (white space and line breaks aside) and `***` lines, else `None`;
+/// with where those lines close groups (`Block::Gallery::breaks`).
+fn gallery_images(blocks: &[Block]) -> Option<(Vec<ImageRef>, Vec<usize>)> {
     let mut images = Vec::new();
+    let mut breaks = Vec::new();
     for block in blocks {
+        if let Block::Rule = block {
+            // A line before any picture or right after another closes
+            // nothing.
+            if !images.is_empty() && breaks.last() != Some(&images.len()) {
+                breaks.push(images.len());
+            }
+            continue;
+        }
         if let Block::Video { src, width, height } = block {
             images.push(ImageRef {
                 src: src.clone(),
@@ -2094,7 +2113,7 @@ fn gallery_images(blocks: &[Block]) -> Option<Vec<ImageRef>> {
             }
         }
     }
-    (!images.is_empty()).then_some(images)
+    (!images.is_empty()).then_some((images, breaks))
 }
 
 /// The (title, src) of each note embed of a paragraph made of nothing
@@ -3036,13 +3055,36 @@ mod tests {
             .blocks
             .iter()
             .filter_map(|b| match b {
-                Block::Gallery { masonry, images } => Some((*masonry, images.len())),
+                Block::Gallery {
+                    masonry, images, ..
+                } => Some((*masonry, images.len())),
                 _ => None,
             })
             .collect();
         assert_eq!(galleries, [(false, 3), (true, 1)]);
         // With text in it, a callout as any other.
         assert!(matches!(doc.blocks[2], Block::Alert { .. }));
+    }
+
+    #[test]
+    fn row_separators_close_groups_of_a_gallery() {
+        // As the plugin writes them: right under a picture line, and in
+        // the masonry one too (where the viewer ignores them). A line
+        // first, or right after another, closes nothing.
+        let doc = Document::parse(concat!(
+            "> [!gallery]\n> ***\n> ![[a.png]]\n> ![[b.png]]\n> ***\n> ![[c.png]]\n> ![[d.png]]\n",
+            "> ***\n>\n> * * *\n> ![[e.png]]\n> ***\n\n",
+            "> [!gallery-masonry]\n> ![[f.png]]\n> ***\n> ![[g.png]]\n",
+        ));
+        let found: Vec<(usize, Vec<usize>)> = doc
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Gallery { images, breaks, .. } => Some((images.len(), breaks.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(found, [(5, vec![2, 4, 5]), (2, vec![1])]);
     }
 
     #[test]
@@ -3058,6 +3100,7 @@ mod tests {
             let Block::Gallery {
                 masonry: actual,
                 images,
+                ..
             } = &doc.blocks[index]
             else {
                 panic!("mixed media must remain a gallery");

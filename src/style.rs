@@ -99,6 +99,33 @@ pub fn set_content_width(width: f32) {
     CONTENT_WIDTH.store(width.to_bits(), Ordering::Relaxed);
 }
 
+/// The height a `[!gallery]` row aims at, in points, unless the reader
+/// chose another.
+pub const DEFAULT_GALLERY_ROW: f32 = 300.0;
+/// The heights the Settings panel offers.
+pub const GALLERY_ROWS: std::ops::RangeInclusive<f32> = 100.0..=600.0;
+
+/// The gallery row height, as `f32` bits.
+static GALLERY_ROW: AtomicU32 = AtomicU32::new(DEFAULT_GALLERY_ROW.to_bits());
+
+/// The height a `[!gallery]` row aims at, in points. Pictures are not text,
+/// so it does not follow the text size.
+pub fn gallery_row() -> f32 {
+    f32::from_bits(GALLERY_ROW.load(Ordering::Relaxed))
+}
+
+/// Sets the gallery row height (see [`GALLERY_ROWS`]). Galleries measured
+/// at the old height must be measured again: the caller bumps the fonts
+/// generation.
+pub fn set_gallery_row(height: f32) {
+    let height = if height.is_finite() {
+        height.clamp(*GALLERY_ROWS.start(), *GALLERY_ROWS.end())
+    } else {
+        DEFAULT_GALLERY_ROW
+    };
+    GALLERY_ROW.store(height.to_bits(), Ordering::Relaxed);
+}
+
 /// Document colors for one theme: GitHub's palette in the light one; in
 /// the dark one the neutral greys of metalmpv or GitHub's, nearly black
 /// ([`DarkStyle`]).

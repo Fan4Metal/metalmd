@@ -729,6 +729,7 @@ impl App {
         ctx.options_mut(|o| o.input_options.line_scroll_speed = 100.0);
         style::set_body_size(startup.settings.text_size);
         style::set_content_width(startup.settings.text_width);
+        style::set_gallery_row(startup.settings.gallery_row);
         let (base_fonts, fonts) = style::load_fonts(
             startup.settings.font.as_ref(),
             startup.settings.mono_font.as_ref(),
@@ -1957,6 +1958,13 @@ impl App {
                 self.settings.video_autoplay = enabled;
                 self.settings_dirty = true;
             }
+            TextChange::GalleryRow(height) => {
+                style::set_gallery_row(height);
+                self.settings.gallery_row = style::gallery_row();
+                self.settings_dirty = true;
+                // Galleries are measured again at the new height.
+                self.fonts_generation += 1;
+            }
             TextChange::Reset => {
                 self.font_request += 1;
                 self.settings.font = None;
@@ -1964,6 +1972,8 @@ impl App {
                 self.settings.mark_color = None;
                 self.settings.mark_color_dark = None;
                 self.settings.video_autoplay = true;
+                style::set_gallery_row(style::DEFAULT_GALLERY_ROW);
+                self.settings.gallery_row = style::DEFAULT_GALLERY_ROW;
                 style::set_body_size(style::DEFAULT_BODY_SIZE);
                 self.settings.text_size = style::DEFAULT_BODY_SIZE;
                 style::set_content_width(style::DEFAULT_CONTENT_WIDTH);

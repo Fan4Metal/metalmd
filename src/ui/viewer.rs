@@ -12,7 +12,7 @@ use crate::markdown::document::{
 use crate::markdown::highlight::{Highlighter, HlSpan};
 use crate::markdown::preprocess::percent_decode;
 use crate::markdown::source::{self, Part, Selected};
-use crate::style::{FontChoice, Palette, body_size, content_width};
+use crate::style::{FontChoice, Palette, body_size, content_width, gallery_row};
 use crate::ui::diagram::DiagramRenderer;
 use crate::ui::emoji::EmojiRenderer;
 use crate::ui::find::{FindState, Match};
@@ -863,7 +863,11 @@ fn draw_block(ui: &mut Ui, block: &Block, rc: &mut RenderCtx<'_>, first: bool, s
             src,
             content,
         } => draw_embed(ui, title, src, content.as_ref(), rc, salt),
-        Block::Gallery { masonry, images } => draw_gallery(ui, *masonry, images, rc, salt),
+        Block::Gallery {
+            masonry,
+            images,
+            breaks,
+        } => draw_gallery(ui, *masonry, images, breaks, rc, salt),
         Block::Video { src, width, height } => {
             draw_video(ui, src, *width, *height, rc);
         }
@@ -1010,43 +1014,174 @@ fn indented<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     result
 }
 
-/// The Media Gallery plugin's defaults: the gap between pictures, the
-/// height a row aims at (at the default text size) and the columns of a
-/// masonry gallery.
+/// The Media Gallery plugin's defaults: the gap between pictures and the
+/// columns of a masonry gallery. The height a row aims at is the reader's
+/// (`style::gallery_row`).
 const GALLERY_GAP: f32 = 5.0;
-const GALLERY_ROW: f32 = 300.0;
 const GALLERY_COLUMNS: usize = 3;
 
-/// Justified rows, as the plugin lays out `[!gallery]`: pictures of the
-/// given aspects (width / height) side by side at one height, each row as
-/// wide as `width`, aiming at `target`; the last row, if short, keeps the
-/// target height. Rectangles from the top left.
-fn justified_rows(aspects: &[f32], width: f32, target: f32, gap: f32) -> Vec<Rect> {
-    let mut rects = Vec::with_capacity(aspects.len());
-    let mut y = 0.0;
-    let mut start = 0;
-    while start < aspects.len() {
-        let mut end = start;
+/// Pictures `start..end` of a justified gallery side by side at `height`.
+#[derive(Debug, PartialEq)]
+struct GalleryRow {
+    start: usize,
+    end: usize,
+    height: f32,
+}
+
+/// How far `height` is from `target`, in ratio terms, so that 0.8 times
+/// and 1.25 times count the same.
+fn off_target(height: f32, target: f32) -> f32 {
+    (height / target).ln().abs()
+}
+
+/// The plugin's `packRows`: pictures go into a row while they fit at the
+/// `target` height; the one that does not is either squeezed in (the row
+/// gets lower) or starts the next row (this one gets higher), whichever
+/// height is nearer the target. A full row is as wide as `width`; the
+/// last one, if short, keeps the target height.
+fn pack_rows(aspects: &[f32], width: f32, target: f32, gap: f32) -> Vec<GalleryRow> {
+    let mut rows = Vec::new();
+    let (mut start, mut sum) = (0, 0.0);
+    for (i, &aspect) in aspects.iter().enumerate() {
+        let n = (i - start + 1) as f32;
+        let with = sum + aspect;
+        if with * target + (n - 1.0) * gap < width {
+            sum = with;
+            continue;
+        }
+        let height_with = (width - (n - 1.0) * gap) / with;
+        let height_without = if i > start {
+            (width - (n - 2.0) * gap) / sum
+        } else {
+            f32::INFINITY
+        };
+        if i > start && off_target(height_without, target) < off_target(height_with, target) {
+            rows.push(GalleryRow {
+                start,
+                end: i,
+                height: height_without,
+            });
+            (start, sum) = (i, aspect);
+            // Too wide even on its own: a lower row of its own.
+            if aspect * target >= width {
+                rows.push(GalleryRow {
+                    start,
+                    end: i + 1,
+                    height: width / aspect,
+                });
+                (start, sum) = (i + 1, 0.0);
+            }
+        } else {
+            rows.push(GalleryRow {
+                start,
+                end: i + 1,
+                height: height_with,
+            });
+            (start, sum) = (i + 1, 0.0);
+        }
+    }
+    if start < aspects.len() {
+        rows.push(GalleryRow {
+            start,
+            end: aspects.len(),
+            height: target,
+        });
+    }
+    rows
+}
+
+/// The plugin's `packClosed`, for a group a `***` line closes: every row
+/// full, the last one too, so a short group is one row as wide as the
+/// gallery. The rows are chosen over the whole group, least Σ log²(height
+/// / target), rather than one by one, which would often leave the last
+/// picture alone in a huge row.
+fn pack_closed(aspects: &[f32], width: f32, target: f32, gap: f32) -> Vec<GalleryRow> {
+    let n = aspects.len();
+    // cost[j]: the best packing of pictures 0..j; from[j]: where its last
+    // row starts.
+    let mut cost = vec![f32::INFINITY; n + 1];
+    let mut from = vec![0; n + 1];
+    cost[0] = 0.0;
+    let height = |i: usize, j: usize, sum: f32| (width - (j - i - 1) as f32 * gap) / sum;
+    for j in 1..=n {
         let mut sum = 0.0;
-        let mut full = false;
-        while end < aspects.len() {
-            sum += aspects[end];
-            end += 1;
-            if sum * target + gap * (end - start - 1) as f32 >= width {
-                full = true;
+        for i in (0..j).rev() {
+            sum += aspects[i];
+            let h = height(i, j, sum);
+            if h <= 0.0 {
+                break;
+            }
+            let c = cost[i] + (h / target).ln().powi(2);
+            if c < cost[j] {
+                cost[j] = c;
+                from[j] = i;
+            }
+            // Longer rows only get lower.
+            if h < target / 4.0 {
                 break;
             }
         }
-        let gaps = gap * (end - start - 1) as f32;
-        let height = if full { (width - gaps) / sum } else { target };
-        let mut x = 0.0;
-        for aspect in &aspects[start..end] {
-            let w = aspect * height;
-            rects.push(Rect::from_min_size(pos2(x, y), vec2(w, height)));
-            x += w + gap;
+    }
+    let mut rows = Vec::new();
+    let mut j = n;
+    while j > 0 {
+        let i = from[j];
+        let sum: f32 = aspects[i..j].iter().sum();
+        rows.push(GalleryRow {
+            start: i,
+            end: j,
+            height: height(i, j, sum).max(1.0),
+        });
+        j = i;
+    }
+    rows.reverse();
+    rows
+}
+
+/// Justified rows, as the plugin lays out `[!gallery]`: pictures of the
+/// given aspects (width / height) side by side at one height, each row as
+/// wide as `width`, aiming at `target`. `breaks` (`Block::Gallery::breaks`)
+/// split them into groups packed on their own; a group they close ends
+/// with a full row (`pack_closed`), the last one may end short
+/// (`pack_rows`). Rectangles from the top left.
+fn justified_rows(
+    aspects: &[f32],
+    breaks: &[usize],
+    width: f32,
+    target: f32,
+    gap: f32,
+) -> Vec<Rect> {
+    let n = aspects.len();
+    let mut groups = Vec::new();
+    let mut start = 0;
+    for &end in breaks {
+        let end = end.min(n);
+        if end > start {
+            groups.push((start, end, true));
+            start = end;
         }
-        y += height + gap;
-        start = end;
+    }
+    if start < n {
+        groups.push((start, n, false));
+    }
+    let mut rects = Vec::with_capacity(n);
+    let mut y = 0.0;
+    for (start, end, closed) in groups {
+        let group = &aspects[start..end];
+        let rows = if closed {
+            pack_closed(group, width, target, gap)
+        } else {
+            pack_rows(group, width, target, gap)
+        };
+        for row in rows {
+            let mut x = 0.0;
+            for aspect in &group[row.start..row.end] {
+                let w = aspect * row.height;
+                rects.push(Rect::from_min_size(pos2(x, y), vec2(w, row.height)));
+                x += w + gap;
+            }
+            y += row.height + gap;
+        }
     }
     rects
 }
@@ -1082,6 +1217,7 @@ fn draw_gallery(
     ui: &mut Ui,
     masonry: bool,
     images: &[ImageRef],
+    breaks: &[usize],
     rc: &mut RenderCtx<'_>,
     salt: u64,
 ) {
@@ -1129,12 +1265,7 @@ fn draw_gallery(
     let rects = if masonry {
         masonry_columns(&aspects, width, GALLERY_COLUMNS, GALLERY_GAP)
     } else {
-        justified_rows(
-            &aspects,
-            width,
-            GALLERY_ROW * body_size() / 16.0,
-            GALLERY_GAP,
-        )
+        justified_rows(&aspects, breaks, width, gallery_row(), GALLERY_GAP)
     };
     let height = rects.iter().map(|r| r.bottom()).fold(0.0, f32::max);
     let (area, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
@@ -3309,11 +3440,15 @@ fn estimate(block: &Block, width: f32) -> f32 {
             let h = height.unwrap_or_else(|| w * 9.0 / 16.0);
             h + gap + 50.0
         }
-        Block::Gallery { masonry, images } => {
+        Block::Gallery {
+            masonry,
+            images,
+            breaks,
+        } => {
             let rows = if *masonry {
                 images.len().div_ceil(GALLERY_COLUMNS) as f32 * width / GALLERY_COLUMNS as f32
             } else {
-                images.len().div_ceil(3) as f32 * GALLERY_ROW * body_size() / 16.0
+                (images.len().div_ceil(3) + breaks.len()) as f32 * gallery_row()
             };
             rows + gap
         }
@@ -3484,7 +3619,7 @@ mod tests {
                             Some(&self.base),
                             &self.find,
                         );
-                        draw_gallery(ui, masonry, images, &mut rc, 0);
+                        draw_gallery(ui, masonry, images, &[], &mut rc, 0);
                         self.actions = rc.actions;
                         height = ui.min_rect().height();
                     },
@@ -3559,12 +3694,7 @@ mod tests {
             let rects = if masonry {
                 masonry_columns(&[1.0; 7], 1200.0, GALLERY_COLUMNS, GALLERY_GAP)
             } else {
-                justified_rows(
-                    &[1.0; 7],
-                    1200.0,
-                    GALLERY_ROW * body_size() / 16.0,
-                    GALLERY_GAP,
-                )
+                justified_rows(&[1.0; 7], &[], 1200.0, gallery_row(), GALLERY_GAP)
             };
             for (index, rect) in rects.iter().enumerate() {
                 let pos = rect.right_top() + vec2(-16.0, 16.0);
@@ -3798,7 +3928,7 @@ mod tests {
     fn galleries_fill_rows_and_columns() {
         // Two 2:1 pictures and a 1:1 at 100 high want 500 of 450: one row
         // of all three, scaled to fit; then a short last row at 100.
-        let rects = justified_rows(&[2.0, 2.0, 1.0, 1.0], 450.0, 100.0, 0.0);
+        let rects = justified_rows(&[2.0, 2.0, 1.0, 1.0], &[], 450.0, 100.0, 0.0);
         assert_eq!(rects.len(), 4);
         assert!((rects[2].right() - 450.0).abs() < 0.01);
         assert!((rects[0].height() - 90.0).abs() < 0.01);
@@ -3807,9 +3937,44 @@ mod tests {
             Rect::from_min_size(pos2(0.0, 90.0), vec2(100.0, 100.0))
         );
         // With gaps, a full row still ends at the width.
-        let rects = justified_rows(&[1.5; 7], 500.0, 120.0, 5.0);
+        let rects = justified_rows(&[1.5; 7], &[], 500.0, 120.0, 5.0);
         let first_row: Vec<&Rect> = rects.iter().filter(|r| r.top() == 0.0).collect();
         assert!((first_row.last().unwrap().right() - 500.0).abs() < 0.01);
+        // A 3:1 squeezed in would make the row 67 high, closing the row
+        // before it 133: nearer 100, so it starts the next, short row.
+        let rows = pack_rows(&[1.0, 1.0, 1.0, 3.0], 400.0, 100.0, 0.0);
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].start, rows[0].end), (0, 3));
+        assert!((rows[0].height - 400.0 / 3.0).abs() < 0.01);
+        assert_eq!(
+            rows[1],
+            GalleryRow {
+                start: 3,
+                end: 4,
+                height: 100.0
+            }
+        );
+
+        // A group closed by `***` is one full row, however high; the
+        // pictures after it start a new row.
+        let rects = justified_rows(&[2.0, 1.0, 1.0, 1.0], &[2], 450.0, 100.0, 0.0);
+        assert!((rects[0].height() - 150.0).abs() < 0.01);
+        assert!((rects[1].right() - 450.0).abs() < 0.01);
+        assert_eq!(
+            rects[2],
+            Rect::from_min_size(pos2(0.0, 150.0), vec2(100.0, 100.0))
+        );
+        // Its rows are all full, the last too: two rows of 3 and 2 rather
+        // than a row of 3 and a lone picture left short.
+        let rows = pack_closed(&[1.5; 5], 500.0, 120.0, 0.0);
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            let width: f32 = (row.end - row.start) as f32 * 1.5 * row.height;
+            assert!((width - 500.0).abs() < 0.01, "{rows:?}");
+        }
+        // A separator after the last picture closes the last group too.
+        let rects = justified_rows(&[1.0, 1.0], &[2], 400.0, 100.0, 0.0);
+        assert!((rects[1].right() - 400.0).abs() < 0.01);
 
         // Masonry: under the shortest column.
         let rects = masonry_columns(&[1.0, 0.5, 1.0, 1.0], 310.0, 3, 5.0);
