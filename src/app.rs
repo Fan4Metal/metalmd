@@ -319,6 +319,15 @@ fn spawn_loader(
         .expect("spawn loader thread");
 }
 
+/// The paths of `tabs` for quick open: the tab read last first and the
+/// one `shown` now last, so Ctrl+K, Enter goes back to the previous
+/// document. Tabs never shown keep their window order.
+fn quick_open_order<'a>(tabs: impl Iterator<Item = &'a Tab>, shown: Option<u64>) -> Vec<PathBuf> {
+    let mut tabs: Vec<&Tab> = tabs.collect();
+    tabs.sort_by_key(|tab| (Some(tab.id) == shown, std::cmp::Reverse(tab.activated)));
+    tabs.into_iter().map(|tab| tab.path.clone()).collect()
+}
+
 /// The absolute path, `.` and `..` resolved, without Windows' `\\?\`
 /// prefix. Not `canonicalize`: it turns a mapped drive (`Z:\a.md`) into the
 /// share behind it, shown in the title and the recent files, and its `\\?\`
@@ -367,6 +376,9 @@ struct Tab {
     /// Reopened from the last run's session: if its file is gone, the tab
     /// closes instead of showing the error.
     restored: bool,
+    /// When it was last shown in the focused window (`App::activations`),
+    /// 0 if never; quick open lists the tabs read last first.
+    activated: u64,
 }
 
 impl Tab {
@@ -394,6 +406,7 @@ impl Tab {
             back: Vec::new(),
             forward: Vec::new(),
             restored: false,
+            activated: 0,
         }
     }
 }
@@ -608,6 +621,10 @@ pub struct App {
     /// The window that last had the focus: files handed over by another
     /// launch open there.
     focused: u64,
+    /// Counts the tabs shown in the focused window (`Tab::activated`).
+    activations: u64,
+    /// The tab counted last.
+    last_activated: Option<u64>,
     next_window_id: u64,
     next_id: u64,
     drag: Option<TabDrag>,
@@ -784,6 +801,8 @@ impl App {
             windows: vec![root],
             current: 0,
             focused: 0,
+            activations: 0,
+            last_activated: None,
             next_window_id: 1,
             next_id,
             drag: None,
@@ -938,6 +957,23 @@ impl App {
         for path in paths {
             let (path, anchor) = (normalize_path(&path), None);
             self.open_path(path, anchor);
+        }
+    }
+
+    /// Opens `path` in a window of its own (Ctrl+Enter in quick open). An
+    /// open document moves out of its window, unless it is alone there.
+    fn open_in_new_window(&mut self, path: PathBuf) {
+        let path = normalize_path(&path);
+        self.open_path(path.clone(), None);
+        let open = self.windows.iter().enumerate().find_map(|(w, window)| {
+            window
+                .tabs
+                .iter()
+                .position(|t| same_path(&t.path, &path))
+                .map(|t| (w, t))
+        });
+        if let Some((w, index)) = open {
+            self.detach_tab(w, index, None);
         }
     }
 
@@ -1986,8 +2022,12 @@ impl App {
         if self.about_here() || self.win().confirm.is_open() {
             return;
         }
-        if consume(command(Key::K)) {
-            self.start_quick_open(ctx);
+        // Ctrl+Shift+K first: Ctrl+K would take it too. While the dialog
+        // is open they move through the list.
+        if consume(command_shift(Key::K)) {
+            self.start_quick_open(ctx, false);
+        } else if consume(command(Key::K)) {
+            self.start_quick_open(ctx, true);
         }
         if self.win().quick_open.open {
             return;
@@ -2146,11 +2186,15 @@ impl App {
         });
     }
 
-    fn start_quick_open(&mut self, ctx: &egui::Context) {
-        let tabs = self
-            .all_tabs()
-            .map(|tab| tab.path.clone())
-            .collect::<Vec<_>>();
+    /// Opens quick open, or moves its selection down (`forward`) or up
+    /// when it is open already.
+    fn start_quick_open(&mut self, ctx: &egui::Context, forward: bool) {
+        if self.win().quick_open.open {
+            self.win().quick_open.step(forward);
+            return;
+        }
+        let shown = self.windows[self.current].active_tab().map(|tab| tab.id);
+        let tabs = quick_open_order(self.all_tabs(), shown);
         let folder = self.windows[self.current]
             .active_tab()
             .and_then(|tab| tab.path.parent())
@@ -2421,7 +2465,7 @@ impl App {
             self.open_dialog();
         }
         if quick_open {
-            self.start_quick_open(ui.ctx());
+            self.start_quick_open(ui.ctx(), true);
         }
         if let Some(choice) = print_choice {
             let ctx = ui.ctx().clone();
@@ -2932,6 +2976,13 @@ impl App {
             window.outer = outer;
             if focused {
                 self.focused = window.id;
+                if let Some(tab) = window.tabs.get_mut(window.active)
+                    && self.last_activated != Some(tab.id)
+                {
+                    self.activations += 1;
+                    tab.activated = self.activations;
+                    self.last_activated = Some(tab.id);
+                }
             }
         }
         if close_requested {
@@ -3109,8 +3160,15 @@ impl App {
         if let Some(target) = self.windows[cur].confirm.show(&ctx) {
             self.open_target(target);
         }
-        if let Some(path) = self.windows[cur].quick_open.show(&ctx) {
-            self.open_paths(vec![path]);
+        use crate::ui::quick_open::Chosen;
+        match self.windows[cur].quick_open.show(&ctx, &palette) {
+            Some(Chosen::Open(path)) => self.open_paths(vec![path]),
+            Some(Chosen::NewWindow(path)) => self.open_in_new_window(path),
+            Some(Chosen::Forget(path)) => {
+                self.settings.remove_recent(&path);
+                self.settings_dirty = true;
+            }
+            None => {}
         }
         for action in actions {
             self.handle_action(&ctx, action);
@@ -3320,6 +3378,23 @@ mod tests {
         assert_eq!(file_url_path("file:/C:/a.png").as_deref(), Some("C:/a.png"));
         assert_eq!(file_url_path("https://example.com"), None);
         assert_eq!(file_url_path("fil"), None);
+    }
+
+    #[test]
+    fn quick_open_lists_the_previous_tab_first_and_the_shown_one_last() {
+        let tabs: Vec<Tab> = [(1, 0), (2, 3), (3, 0), (4, 5), (5, 4)]
+            .into_iter()
+            .map(|(id, activated)| Tab {
+                activated,
+                ..Tab::new(id, PathBuf::from(format!("{id}.md")))
+            })
+            .collect();
+        let order = quick_open_order(tabs.iter(), Some(4));
+        let names: Vec<_> = order
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["5.md", "2.md", "1.md", "3.md", "4.md"]);
     }
 
     #[test]

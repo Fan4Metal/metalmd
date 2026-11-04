@@ -85,7 +85,7 @@ The portable archive, `MetalMD_<version>_portable.zip`, holds the program in a `
 | Keys | Action |
 |---|---|
 | `Ctrl+O` | Open a file |
-| `Ctrl+K` | Quick open: tabs, recent files and notes in the current vault |
+| `Ctrl+K` | Quick open: tabs (the previous one first), recent files and notes in the current vault, found by fuzzy search; `Ctrl+Enter` opens in a new window, `Shift+Delete` removes a recent file |
 | `Ctrl+W`, middle click on a tab | Close the tab |
 | `Ctrl+Shift+T` | Reopen the tab closed last |
 | `Ctrl+Tab`, `Ctrl+Shift+Tab` (`Ctrl+PageDown`, `Ctrl+PageUp`) | Next and previous tab |
